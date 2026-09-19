@@ -10,7 +10,7 @@ dependencies = [
     "typesafe-sdk>=0.7.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "jsonschema>=4.0",

@@ -11,13 +11,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-path: python/uv.lock
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install and test Python runtime
         run: |
           cd python
-          uv sync --dev
+          uv sync --locked --dev
           uv run pytest -q
       - name: Smoke CLI (mock)
         run: |
