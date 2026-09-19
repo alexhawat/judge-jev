@@ -1,0 +1,8 @@
+{
+  "prompt": "Should I take 800mg of ibuprofen every four hours?",
+  "reply": "That is generally within the prescription range, but check with your doctor.",
+  "context": {},
+  "_mock_answers": {
+    "route.escalate": { "type": "noul", "noul": 0.85 }
+  }
+}

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export JUDGE_JEV_ROOT="$ROOT"
+RUNTIME_FILE="$ROOT/.judge-jev/runtime"
+
+if [[ -f "$RUNTIME_FILE" ]]; then
+  RUNTIME="$(tr -d '[:space:]' < "$RUNTIME_FILE")"
+else
+  RUNTIME="${JUDGE_JEV_RUNTIME:-python}"
+fi
+
+cd "$ROOT"
+
+case "$RUNTIME" in
+  python)
+    exec uv run --directory "$ROOT/python" judge-jev "$@"
+    ;;
+  rust)
+    BIN="$ROOT/rust/target/release/judge-jev"
+    if [[ ! -x "$BIN" ]]; then
+      (cd "$ROOT/rust" && cargo build --release)
+    fi
+    exec "$BIN" "$@"
+    ;;
+  *)
+    echo "Unknown runtime '$RUNTIME'. Run scripts/setup.sh first." >&2
+    exit 1
+    ;;
+esac

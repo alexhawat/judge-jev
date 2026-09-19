@@ -1,5 +1,123 @@
 # judge-jev
 
-Private. Jev-native judge kit for LLM outputs (skill + agents + core).
+Private Jev-native judge kit for LLM outputs (assistant replies, agent trajectories). Dual production runtimes share rubrics, schemas, and CLI behavior.
 
-See CHECKLIST patterns: fan-out questions, pin model, confidence routing, filtered state.
+## Agent-first setup
+
+**Coding agents: read [AGENTS.md](AGENTS.md) and [llms.txt](llms.txt) before changing or running anything.**
+
+Quick start:
+
+```bash
+git clone git@github.com:alexhawat/judge-jev.git
+cd judge-jev
+bash scripts/setup.sh                    # picks python or rust → .judge-jev/runtime
+export TYPESAFE_API_KEY=...              # optional for live mode
+./scripts/judge-jev run --rubric assistant-reply --input fixtures/assistant-reply-pass.json --mock
+```
+
+## CLI
+
+| Command | Description |
+|---------|-------------|
+| `judge-jev setup` | Choose/install runtime |
+| `judge-jev run --rubric <id> --input <path> [--mock]` | Run funnel → JSON `JudgmentResult` on stdout |
+| `judge-jev rubric list\|show --id <id>` | Inspect shared rubrics |
+| `judge-jev replay --input <result.json>` | Re-route saved answers |
+
+Exit codes — verdicts: `0` pass, `1` fail, `2` review, `3` escalate, `4` skip.
+Operational failure (the judgment did not happen): `10` error, `11` usage. These are
+kept clear of the verdict range so a crash can never be read as a verdict of `fail`.
+JSON goes to stdout, logs to stderr, so `judge-jev run ... | jq` works.
+
+Use `./scripts/judge-jev` from repo root (dispatches via `.judge-jev/runtime`).
+
+## Funnel
+
+Each rubric implements: **screen → profile → locate → score → route**
+
+- All questions fan out in one TypeSafe `system_one` call (pinned `jev-1.13.0`).
+- Routing rules are **declarative data** in the rubric YAML, evaluated identically by
+  both runtimes. No runtime interprets a rule as code.
+- `--mock` provides deterministic CI-friendly answers without `TYPESAFE_API_KEY`.
+
+### Routing rules
+
+Rules run in order; the first whose `all` conditions hold wins. Conditions are ANDed
+and short-circuit on the first false.
+
+```yaml
+- verdict: escalate
+  reason: Possible prompt injection in untrusted state.
+  all:
+    - { answer: screen.injection, field: noul, op: ">=", value: 0.7 }
+```
+
+`field` is `noul`, `score`, `confidence`, or `choice`; `op` is `<  <=  >  >=  ==  !=`.
+Rubrics are validated at load: a rule naming an unknown answer, an operator that does
+not exist, a field the question's type cannot produce, or a choice value that is not a
+declared label is rejected before any judgment runs.
+
+A rule that *cannot* be evaluated — because an answer it reads is missing from the
+response — escalates rather than being skipped, so a dropped answer can never let a
+laxer rule decide the verdict.
+
+### Confidence
+
+`confidence` is the certainty of the answers the matched rule actually read
+(`deciding_answers`), taken as the **minimum** — one uncertain input holds the whole
+verdict back. Answers the rule did not read never inflate it. Noul carries no
+confidence of its own, so distance from 0.5 stands in for it.
+
+An automatic `pass` or `fail` whose confidence falls below the rubric's
+`confidence_floors[stakes]` is downgraded to `review`, with the reason recording why.
+`review`, `escalate`, and `skip` already defer to a human and are not gated.
+
+## Layout
+
+```
+shared/rubrics/          # assistant-reply, agent-trajectory
+shared/schemas/          # JudgmentResult JSON Schema
+python/                  # uv + loguru + typesafe-sdk
+rust/                    # cargo + tracing + HTTP client (POST /v1/systemone)
+skills/judge-jev/        # agent skill
+agents/                  # charters
+hooks/                   # pre/post + harness snippets
+adapters/                # claude-code, cursor, opencode, codex, openclaw, hermes, grok-bot
+scripts/                 # setup, CLI dispatcher, runtime parity check
+fixtures/                # smoke inputs (fixtures/recorded/ holds real API shapes)
+```
+
+## Runtimes
+
+| Runtime | Stack | Live API |
+|---------|-------|----------|
+| Python | uv, loguru, typesafe-sdk | Official SDK |
+| Rust | cargo, tracing, minreq | HTTP client matching Python wire format |
+
+Both runtimes must produce the same `JudgmentResult` for the same input;
+`scripts/check-parity.sh` enforces it in CI.
+
+Set `JUDGE_JEV_RUNTIME=python|rust` or run setup interactively.
+
+## Harness integration
+
+Install the adapter README for your host under `adapters/`. Hooks under `hooks/` call the same CLI—no embedded Jev prompts in harness config.
+
+## Development
+
+```bash
+# Python tests
+cd python && uv sync --dev && uv run pytest
+
+# Rust tests
+cd rust && cargo test
+```
+
+## Jaggedness
+
+Structured Jev judgments are fast and auditable, but accuracy is not uniform across tasks. Keep review/escalation paths for destructive stakes, low confidence, or untrusted inputs. Log `model`, `usage`, and answer probabilities for calibration.
+
+## License
+
+See [LICENSE](LICENSE).

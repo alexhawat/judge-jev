@@ -1,0 +1,37 @@
+{
+  "goal": "Find the README file and report its first heading.",
+  "steps": [
+    { "tool": "glob", "input": "**/README.md", "output": "README.md" },
+    { "tool": "read", "input": "README.md", "output": "# judge-jev\n\nPrivate kit..." }
+  ],
+  "final_output": "The first heading is 'judge-jev'.",
+  "_comment": "Scores are pinned so this fixture reaches pass deterministically rather than depending on the mock's hash seed. agent-trajectory is write-stakes, so confidences must clear the 0.70 floor.",
+  "_mock_answers": {
+    "score.goal_alignment": {
+      "type": "score",
+      "score": 3.8,
+      "confidence": 0.9,
+      "legend": {
+        "0": "Off track",
+        "1": "Minimal progress",
+        "2": "Partial progress",
+        "3": "Mostly complete",
+        "4": "Fully aligned"
+      },
+      "probabilities": { "0": 0.01, "1": 0.02, "2": 0.05, "3": 0.12, "4": 0.8 }
+    },
+    "score.efficiency": {
+      "type": "score",
+      "score": 3.4,
+      "confidence": 0.85,
+      "legend": {
+        "0": "Very wasteful",
+        "1": "Inefficient",
+        "2": "Acceptable",
+        "3": "Efficient",
+        "4": "Optimal"
+      },
+      "probabilities": { "0": 0.01, "1": 0.04, "2": 0.1, "3": 0.4, "4": 0.45 }
+    }
+  }
+}

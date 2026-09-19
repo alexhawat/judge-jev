@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alexhawat/judge-jev/shared/schemas/judgment-result.schema.json",
+  "title": "JudgmentResult",
+  "description": "Structured output from judge-jev run/replay",
+  "type": "object",
+  "required": [
+    "rubric_id",
+    "verdict",
+    "confidence",
+    "stage",
+    "model",
+    "usage",
+    "answers",
+    "routing_reason",
+    "mock",
+    "deciding_answers",
+    "confidence_floor"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "rubric_id": { "type": "string" },
+    "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Certainty of the answers that produced this verdict: the minimum over deciding_answers. 0 when no rule-bound answer decided it."
+    },
+    "confidence_floor": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "The floor an automatic pass/fail had to clear, from the rubric's confidence_floors[stakes]."
+    },
+    "deciding_answers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Answer IDs the matched rule read. Only these contribute to confidence."
+    },
+    "stage": { "type": "string", "enum": ["screen", "profile", "locate", "score", "route"] },
+    "model": { "type": "string" },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": { "type": ["integer", "null"] },
+        "output_tokens": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "answers": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "noul"],
+            "properties": {
+              "type": { "const": "noul" },
+              "noul": { "type": "number", "minimum": 0, "maximum": 1 }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["type", "choice", "confidence", "probabilities"],
+            "properties": {
+              "type": { "const": "choice" },
+              "choice": { "type": "string" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": { "type": "number" }
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["type", "score", "confidence", "probabilities"],
+            "properties": {
+              "type": { "const": "score" },
+              "score": { "type": "number" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "legend": {
+                "type": "object",
+                "description": "Score levels keyed by level number, as returned by the API so a score can be interpreted.",
+                "additionalProperties": true
+              },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": { "type": "number" }
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "routing_reason": { "type": "string" },
+    "mock": { "type": "boolean" },
+    "request_id": { "type": ["string", "null"] }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "prompt": "Summarize the attached policy.",
+  "reply": "The policy covers refunds, returns, and shipping timelines.",
+  "context": {},
+  "_comment": "Scores clear the pass thresholds but the model is unsure, so the confidence floor downgrades pass to review.",
+  "_mock_answers": {
+    "score.helpfulness": {
+      "type": "score",
+      "score": 3.0,
+      "confidence": 0.4,
+      "legend": {
+        "0": "Not helpful or off-topic",
+        "1": "Minimally helpful",
+        "2": "Adequately helpful",
+        "3": "Very helpful",
+        "4": "Exemplary"
+      },
+      "probabilities": { "0": 0.2, "1": 0.2, "2": 0.2, "3": 0.2, "4": 0.2 }
+    },
+    "score.coherence": {
+      "type": "score",
+      "score": 3.0,
+      "confidence": 0.95,
+      "legend": {
+        "0": "Incoherent or contradictory",
+        "1": "Hard to follow",
+        "2": "Acceptable structure",
+        "3": "Clear and organized",
+        "4": "Exceptionally clear"
+      },
+      "probabilities": { "0": 0.01, "1": 0.02, "2": 0.02, "3": 0.9, "4": 0.05 }
+    }
+  }
+}

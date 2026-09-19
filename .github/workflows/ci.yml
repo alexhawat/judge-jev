@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'cursor/**']
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-path: python/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and test Python runtime
+        run: |
+          cd python
+          uv sync --locked --dev
+          uv run pytest -q
+      - name: Smoke CLI (mock)
+        run: |
+          cd python
+          uv run judge-jev run --rubric assistant-reply --input ../fixtures/assistant-reply-pass.json --mock
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98
+        with:
+          components: clippy, rustfmt
+      - name: Format
+        run: cd rust && cargo fmt --check
+      - name: Lint
+        run: cd rust && cargo clippy --all-targets -- -D warnings
+      - name: Test Rust runtime
+        run: cd rust && cargo test --quiet
+      - name: Smoke CLI (mock)
+        run: |
+          cd rust
+          cargo run --quiet -- run --rubric assistant-reply --input ../fixtures/assistant-reply-pass.json --mock
+
+  # The shared rubrics are only shared if both runtimes reach the same verdict from
+  # the same input. This is the check that the previous Rust routing would have failed.
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-path: python/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.98
+      - name: Build both runtimes
+        run: |
+          cd python && uv sync --locked --dev && cd ..
+          cd rust && cargo build --release --quiet
+      - name: Runtimes must agree
+        run: bash scripts/check-parity.sh
+
+  schemas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-path: python/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rubrics must match rubric.schema.json
+        run: |
+          cd python
+          uv sync --locked --dev
+          uv run python - <<'PY'
+          import json, pathlib, yaml, jsonschema
+          root = pathlib.Path("..")
+          schema = json.loads((root / "shared/schemas/rubric.schema.json").read_text())
+          for path in sorted((root / "shared/rubrics").glob("*.yaml")):
+              jsonschema.validate(yaml.safe_load(path.read_text()), schema)
+              print(f"ok {path.name}")
+          PY
