@@ -1,0 +1,25 @@
+{
+  "default": {
+    "is_empty": { "type": "noul", "noul": 0.02 },
+    "in_scope": { "type": "noul", "noul": 0.95 },
+    "reply_kind": {
+      "type": "choice",
+      "choice": "factual",
+      "confidence": 0.92,
+      "probabilities": { "factual": 0.92, "creative": 0.03, "refusal": 0.02, "other": 0.03 }
+    },
+    "hallucination_risk": { "type": "noul", "noul": 0.08 },
+    "policy_risk": { "type": "noul", "noul": 0.01 },
+    "quality": {
+      "type": "score",
+      "score": 2,
+      "confidence": 0.88,
+      "legend": {
+        "0": "Wrong, misleading, or off-topic",
+        "1": "Partially helpful but missing key details",
+        "2": "Clear, accurate, and appropriately scoped"
+      },
+      "probabilities": { "0": 0.02, "1": 0.1, "2": 0.88 }
+    }
+  }
+}

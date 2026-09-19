@@ -1,0 +1,25 @@
+{
+  "name": "judge-jev",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Jev-native judge kit for LLM outputs",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @judge-jev/core -w @judge-jev/cli",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -b",
+    "judge-jev": "node packages/cli/dist/bin.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "yaml": "^2.6.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

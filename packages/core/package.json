@@ -1,0 +1,24 @@
+{
+  "name": "@judge-jev/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
