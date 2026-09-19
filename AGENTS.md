@@ -63,7 +63,9 @@ All adapters invoke `./scripts/judge-jev` so runtime selection stays in `.judge-
 ./scripts/judge-jev rubric list
 ```
 
-Expect JSON stdout (`JudgmentResult`) and exit code `0` (pass) or `2` (review) depending on mock routing.
+Expect JSON on stdout (`JudgmentResult`) and logs on stderr. Verdict exit codes are
+`0` pass, `1` fail, `2` review, `3` escalate, `4` skip; `10`/`11` mean the judgment did
+not happen (operational error / usage) and must not be read as a verdict.
 
 ## 6. Judge real artifacts
 
@@ -83,7 +85,10 @@ See `llms.txt` and shared rubrics. Summary:
 
 1. One batched `system_one` call with all rubric questions; route in code.
 2. Filter state before calling TypeSafe; never send irrelevant blobs.
-3. Apply confidence floors from rubric stakes; treat injection in untrusted content as hostile.
+3. Confidence floors are applied automatically: an automatic pass/fail below
+   `confidence_floors[stakes]` is downgraded to review. Read `confidence` together with
+   `deciding_answers` — it is the minimum over the answers the matched rule read, not a
+   summary of every answer. Treat injection in untrusted content as hostile.
 4. Noul 0.5 is uncertainty—not a semantic midpoint.
 5. Version questions and thresholds in `shared/rubrics/*.yaml` only.
 

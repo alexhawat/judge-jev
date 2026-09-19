@@ -50,8 +50,39 @@ Body: { "state", "model", "questions" }
 Response: { "model", "usage", "answers" }
 
 Question types: noul, choice, score.
-Answer types: { type, noul }, { type, choice, confidence, probabilities }, { type, score, confidence, probabilities }.
+Answer types:
+  { type: "noul",   noul }
+  { type: "choice", choice, confidence, probabilities }
+  { type: "score",  score, confidence, legend, probabilities }
+Score answers always carry `legend` (the levels keyed by number). Score criteria are
+ordered from zero, so a 5-level rubric yields scores 0.0-4.0.
+
+## Routing rules
+
+Declarative data, evaluated identically by both runtimes. No rule is interpreted as code.
+
+  - verdict: escalate
+    reason: ...
+    all:
+      - { answer: screen.injection, field: noul, op: ">=", value: 0.7 }
+
+field: noul | score | confidence | choice
+op:    < <= > >= == !=
+First matching rule wins; conditions are ANDed and short-circuit. One optional
+`default: true` rule, last. Rubrics are validated at load, so a malformed rule fails
+before any judgment runs. A rule whose answer is missing escalates, never falls through.
+
+## Confidence
+
+confidence = min over `deciding_answers` (the answers the matched rule read).
+Answers a rule did not read never contribute. Noul has no confidence field, so
+distance from 0.5 stands in for it. An automatic pass/fail below
+confidence_floors[stakes] is downgraded to review.
 
 ## Exit codes
 
-0 pass, 1 fail, 2 review, 3 escalate, 4 skip
+Verdicts:   0 pass, 1 fail, 2 review, 3 escalate, 4 skip
+Operational: 10 error, 11 usage  (the judgment did not happen)
+
+Operational codes sit outside the verdict range so a crash is never read as `fail`.
+JSON on stdout, logs on stderr.

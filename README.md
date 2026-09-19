@@ -25,7 +25,10 @@ export TYPESAFE_API_KEY=...              # optional for live mode
 | `judge-jev rubric list\|show --id <id>` | Inspect shared rubrics |
 | `judge-jev replay --input <result.json>` | Re-route saved answers |
 
-Exit codes: `0` pass, `1` fail, `2` review, `3` escalate, `4` skip.
+Exit codes — verdicts: `0` pass, `1` fail, `2` review, `3` escalate, `4` skip.
+Operational failure (the judgment did not happen): `10` error, `11` usage. These are
+kept clear of the verdict range so a crash can never be read as a verdict of `fail`.
+JSON goes to stdout, logs to stderr, so `judge-jev run ... | jq` works.
 
 Use `./scripts/judge-jev` from repo root (dispatches via `.judge-jev/runtime`).
 
@@ -34,8 +37,41 @@ Use `./scripts/judge-jev` from repo root (dispatches via `.judge-jev/runtime`).
 Each rubric implements: **screen → profile → locate → score → route**
 
 - All questions fan out in one TypeSafe `system_one` call (pinned `jev-1.13.0`).
-- Routing rules in rubric YAML execute in code against answers + confidence floors.
+- Routing rules are **declarative data** in the rubric YAML, evaluated identically by
+  both runtimes. No runtime interprets a rule as code.
 - `--mock` provides deterministic CI-friendly answers without `TYPESAFE_API_KEY`.
+
+### Routing rules
+
+Rules run in order; the first whose `all` conditions hold wins. Conditions are ANDed
+and short-circuit on the first false.
+
+```yaml
+- verdict: escalate
+  reason: Possible prompt injection in untrusted state.
+  all:
+    - { answer: screen.injection, field: noul, op: ">=", value: 0.7 }
+```
+
+`field` is `noul`, `score`, `confidence`, or `choice`; `op` is `<  <=  >  >=  ==  !=`.
+Rubrics are validated at load: a rule naming an unknown answer, an operator that does
+not exist, a field the question's type cannot produce, or a choice value that is not a
+declared label is rejected before any judgment runs.
+
+A rule that *cannot* be evaluated — because an answer it reads is missing from the
+response — escalates rather than being skipped, so a dropped answer can never let a
+laxer rule decide the verdict.
+
+### Confidence
+
+`confidence` is the certainty of the answers the matched rule actually read
+(`deciding_answers`), taken as the **minimum** — one uncertain input holds the whole
+verdict back. Answers the rule did not read never inflate it. Noul carries no
+confidence of its own, so distance from 0.5 stands in for it.
+
+An automatic `pass` or `fail` whose confidence falls below the rubric's
+`confidence_floors[stakes]` is downgraded to `review`, with the reason recording why.
+`review`, `escalate`, and `skip` already defer to a human and are not gated.
 
 ## Layout
 
@@ -48,8 +84,8 @@ skills/judge-jev/        # agent skill
 agents/                  # charters
 hooks/                   # pre/post + harness snippets
 adapters/                # claude-code, cursor, opencode, codex, openclaw, hermes, grok-bot
-scripts/                 # setup + CLI dispatcher
-fixtures/                # smoke inputs
+scripts/                 # setup, CLI dispatcher, runtime parity check
+fixtures/                # smoke inputs (fixtures/recorded/ holds real API shapes)
 ```
 
 ## Runtimes
@@ -57,7 +93,10 @@ fixtures/                # smoke inputs
 | Runtime | Stack | Live API |
 |---------|-------|----------|
 | Python | uv, loguru, typesafe-sdk | Official SDK |
-| Rust | cargo, tracing, reqwest | HTTP client matching Python wire format |
+| Rust | cargo, tracing, minreq | HTTP client matching Python wire format |
+
+Both runtimes must produce the same `JudgmentResult` for the same input;
+`scripts/check-parity.sh` enforces it in CI.
 
 Set `JUDGE_JEV_RUNTIME=python|rust` or run setup interactively.
 

@@ -3,7 +3,7 @@
   "$id": "https://github.com/alexhawat/judge-jev/shared/schemas/rubric.schema.json",
   "title": "Rubric",
   "type": "object",
-  "required": ["id", "version", "model", "stakes", "questions", "routing"],
+  "required": ["id", "version", "model", "stakes", "confidence_floors", "questions", "routing"],
   "properties": {
     "id": { "type": "string" },
     "version": { "type": "string" },
@@ -12,10 +12,11 @@
     "stakes": { "type": "string", "enum": ["read_only", "write", "destructive"] },
     "confidence_floors": {
       "type": "object",
+      "description": "Floor an automatic pass/fail must clear, per stakes level. The rubric's own stakes must have an entry.",
       "properties": {
-        "read_only": { "type": "number" },
-        "write": { "type": "number" },
-        "destructive": { "type": "number" }
+        "read_only": { "type": "number", "minimum": 0, "maximum": 1 },
+        "write": { "type": "number", "minimum": 0, "maximum": 1 },
+        "destructive": { "type": "number", "minimum": 0, "maximum": 1 }
       }
     },
     "state_filter": {
@@ -25,6 +26,7 @@
     },
     "questions": {
       "type": "object",
+      "minProperties": 1,
       "additionalProperties": {
         "type": "object",
         "required": ["type", "stage"],
@@ -42,14 +44,35 @@
       "properties": {
         "rules": {
           "type": "array",
+          "minItems": 1,
+          "description": "Evaluated in order; first match wins. Conditions within a rule are ANDed and short-circuit on the first false.",
           "items": {
             "type": "object",
-            "required": ["verdict", "when"],
+            "required": ["verdict"],
             "properties": {
               "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
-              "when": { "type": "string" },
-              "reason": { "type": "string" }
-            }
+              "reason": { "type": "string" },
+              "default": { "type": "boolean", "description": "Catch-all. Must be the last rule and carry no conditions." },
+              "all": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["answer", "field", "op", "value"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "answer": { "type": "string", "description": "A question ID declared in this rubric." },
+                    "field": { "type": "string", "enum": ["noul", "score", "confidence", "choice"] },
+                    "op": { "type": "string", "enum": ["<", "<=", ">", ">=", "==", "!="] },
+                    "value": { "type": ["number", "string"] }
+                  }
+                }
+              }
+            },
+            "oneOf": [
+              { "required": ["all"] },
+              { "required": ["default"] }
+            ]
           }
         }
       }

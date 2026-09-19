@@ -18,7 +18,11 @@ fn prompt_runtime() -> Result<String> {
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
     let choice = line.trim();
-    Ok(if choice == "2" { "rust".into() } else { "python".into() })
+    Ok(if choice == "2" {
+        "rust".into()
+    } else {
+        "python".into()
+    })
 }
 
 fn install_python(root: &std::path::Path) -> Result<()> {

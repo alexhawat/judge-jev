@@ -1,0 +1,26 @@
+{
+  "prompt": "Walk me through resetting my password.",
+  "reply": "No.",
+  "context": {},
+  "_mock_answers": {
+    "profile.intent": {
+      "type": "choice",
+      "choice": "refusal",
+      "confidence": 0.88,
+      "probabilities": { "answer": 0.04, "refusal": 0.88, "clarification": 0.04, "mixed": 0.04 }
+    },
+    "score.helpfulness": {
+      "type": "score",
+      "score": 0.4,
+      "confidence": 0.91,
+      "legend": {
+        "0": "Not helpful or off-topic",
+        "1": "Minimally helpful",
+        "2": "Adequately helpful",
+        "3": "Very helpful",
+        "4": "Exemplary"
+      },
+      "probabilities": { "0": 0.7, "1": 0.2, "2": 0.05, "3": 0.03, "4": 0.02 }
+    }
+  }
+}

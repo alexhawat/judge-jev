@@ -1,4 +1,14 @@
 {
+  "_comment": [
+    "Runs judge-jev after each tool use. JUDGE_JEV_INPUT must point at a JSON file",
+    "holding the trajectory to judge.",
+    "Exit codes: 0 pass, 1 fail, 2 review, 3 escalate, 4 skip, 10 operational error.",
+    "This template blocks only on escalate (3) and lets every other outcome through;",
+    "drop the `case` to block on fail as well. Do not add `|| true`: that discards",
+    "the verdict and makes the hook decorative.",
+    "Add --mock to judge without an API key; it returns canned answers, so a mocked",
+    "hook must never be treated as a real safety check."
+  ],
   "hooks": {
     "PostToolUse": [
       {
@@ -6,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc './scripts/judge-jev run --rubric agent-trajectory --input \"$JUDGE_JEV_INPUT\" --mock || true'"
+            "command": "bash -lc 'set -o pipefail; \"${CLAUDE_PROJECT_DIR:-.}/scripts/judge-jev\" run --rubric agent-trajectory --input \"$JUDGE_JEV_INPUT\"; code=$?; case $code in 3) echo \"judge-jev: escalated for human review\" >&2; exit 2 ;; 10|11) echo \"judge-jev: could not judge (exit $code)\" >&2; exit 0 ;; *) exit 0 ;; esac'"
           }
         ]
       }

@@ -1,4 +1,4 @@
 {
-  "description": "Cursor hook template: invoke judge-jev after tool use when JUDGE_JEV_AUTO=1",
-  "command": "bash -lc 'ROOT=\"${CURSOR_PROJECT_DIR:-.}\"; if [ \"${JUDGE_JEV_AUTO:-}\" = 1 ]; then \"$ROOT/scripts/judge-jev\" run --rubric agent-trajectory --input \"$JUDGE_JEV_INPUT\" --mock; fi'"
+  "description": "Cursor hook template: invoke judge-jev after tool use when JUDGE_JEV_AUTO=1. Exit 3 (escalate) is surfaced as a failure; 10/11 are operational errors and do not block. Add --mock only for smoke-testing the wiring, never as a real safety check.",
+  "command": "bash -lc 'ROOT=\"${CURSOR_PROJECT_DIR:-.}\"; [ \"${JUDGE_JEV_AUTO:-}\" = 1 ] || exit 0; \"$ROOT/scripts/judge-jev\" run --rubric agent-trajectory --input \"$JUDGE_JEV_INPUT\"; code=$?; case $code in 3) exit 1 ;; 10|11) echo \"judge-jev: could not judge (exit $code)\" >&2; exit 0 ;; *) exit 0 ;; esac'"
 }

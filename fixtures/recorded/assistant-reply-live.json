@@ -1,0 +1,47 @@
+{
+  "_comment": "Answer payload recorded from the real API shape (typesafe-sdk 0.7.0), including the `legend` that Score answers always carry. Used as replay input so routing and the JSON Schema are exercised against real shapes, not the mock's.",
+  "rubric_id": "assistant-reply",
+  "model": "jev-1.13.0",
+  "mock": false,
+  "request_id": "req_recorded_001",
+  "usage": { "input_tokens": 412, "output_tokens": 37 },
+  "answers": {
+    "screen.judgeable": { "type": "noul", "noul": 0.96 },
+    "screen.injection": { "type": "noul", "noul": 0.04 },
+    "locate.hallucination_risk": { "type": "noul", "noul": 0.21 },
+    "locate.harmful": { "type": "noul", "noul": 0.02 },
+    "route.escalate": { "type": "noul", "noul": 0.08 },
+    "profile.intent": {
+      "type": "choice",
+      "choice": "answer",
+      "confidence": 0.31,
+      "probabilities": { "answer": 0.34, "refusal": 0.22, "clarification": 0.22, "mixed": 0.22 }
+    },
+    "score.helpfulness": {
+      "type": "score",
+      "score": 3.2,
+      "confidence": 0.28,
+      "legend": {
+        "0": "Not helpful or off-topic",
+        "1": "Minimally helpful",
+        "2": "Adequately helpful",
+        "3": "Very helpful",
+        "4": "Exemplary"
+      },
+      "probabilities": { "0": 0.05, "1": 0.1, "2": 0.2, "3": 0.3, "4": 0.35 }
+    },
+    "score.coherence": {
+      "type": "score",
+      "score": 3.0,
+      "confidence": 0.3,
+      "legend": {
+        "0": "Incoherent or contradictory",
+        "1": "Hard to follow",
+        "2": "Acceptable structure",
+        "3": "Clear and organized",
+        "4": "Exceptionally clear"
+      },
+      "probabilities": { "0": 0.05, "1": 0.1, "2": 0.25, "3": 0.3, "4": 0.3 }
+    }
+  }
+}
