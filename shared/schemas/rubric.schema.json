@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alexhawat/judge-jev/shared/schemas/rubric.schema.json",
+  "title": "Rubric",
+  "type": "object",
+  "required": ["id", "version", "model", "stakes", "questions", "routing"],
+  "properties": {
+    "id": { "type": "string" },
+    "version": { "type": "string" },
+    "description": { "type": "string" },
+    "model": { "type": "string" },
+    "stakes": { "type": "string", "enum": ["read_only", "write", "destructive"] },
+    "confidence_floors": {
+      "type": "object",
+      "properties": {
+        "read_only": { "type": "number" },
+        "write": { "type": "number" },
+        "destructive": { "type": "number" }
+      }
+    },
+    "state_filter": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Top-level keys to include when building TypeSafe state"
+    },
+    "questions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "stage"],
+        "properties": {
+          "type": { "type": "string", "enum": ["noul", "choice", "score"] },
+          "stage": { "type": "string", "enum": ["screen", "profile", "locate", "score", "route"] },
+          "instructions": { "type": "string" },
+          "criteria": {}
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "required": ["rules"],
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["verdict", "when"],
+            "properties": {
+              "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
+              "when": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

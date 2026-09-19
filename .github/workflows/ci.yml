@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'cursor/**']
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and test Python runtime
+        run: |
+          cd python
+          uv sync --dev
+          uv run pytest -q
+      - name: Smoke CLI (mock)
+        run: |
+          cd python
+          uv run judge-jev run --rubric assistant-reply --input ../fixtures/assistant-reply-pass.json --mock
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98
+      - name: Test Rust runtime
+        run: |
+          cd rust
+          cargo test --quiet
+      - name: Smoke CLI (mock)
+        run: |
+          cd rust
+          cargo run --quiet -- run --rubric assistant-reply --input ../fixtures/assistant-reply-pass.json --mock

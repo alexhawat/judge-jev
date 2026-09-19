@@ -1,0 +1,14 @@
+.judge-jev/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.python-version
+uv.lock
+.venv/
+target/
+*.swp
+.DS_Store
+.idea/
+.vscode/

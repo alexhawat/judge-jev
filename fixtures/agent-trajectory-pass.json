@@ -1,0 +1,8 @@
+{
+  "goal": "Find the README file and report its first heading.",
+  "steps": [
+    { "tool": "glob", "input": "**/README.md", "output": "README.md" },
+    { "tool": "read", "input": "README.md", "output": "# judge-jev\n\nPrivate kit..." }
+  ],
+  "final_output": "The first heading is 'judge-jev'."
+}

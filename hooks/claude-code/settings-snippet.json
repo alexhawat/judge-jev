@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc './scripts/judge-jev run --rubric agent-trajectory --input \"$JUDGE_JEV_INPUT\" --mock || true'"
+          }
+        ]
+      }
+    ]
+  }
+}

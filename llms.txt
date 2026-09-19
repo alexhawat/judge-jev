@@ -1,0 +1,57 @@
+# judge-jev — machine-readable project map
+
+> Private Jev-native judge kit. Dual production runtimes (Python + Rust), shared rubrics/schemas, harness adapters.
+
+## Setup (agents read this first)
+
+1. Clone/open repo root (must contain `shared/rubrics/`).
+2. Run `bash scripts/setup.sh` OR `JUDGE_JEV_RUNTIME=python|rust bash scripts/setup.sh`.
+3. Confirm `.judge-jev/runtime` is `python` or `rust`.
+4. Export `TYPESAFE_API_KEY` for live judging; use `--mock` without a key.
+5. Smoke: `./scripts/judge-jev run --rubric assistant-reply --input fixtures/assistant-reply-pass.json --mock`
+6. Install harness adapter under `adapters/<harness>/` and optional hooks under `hooks/`.
+
+## CLI (both runtimes)
+
+- `judge-jev setup`
+- `judge-jev run --rubric <id> --input <path> [--mock]`
+- `judge-jev rubric list|show --id <id>`
+- `judge-jev replay --input <judgment-result.json>`
+
+Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
+
+## Layout
+
+- `shared/rubrics/` — YAML question packs + routing rules (assistant-reply, agent-trajectory)
+- `shared/schemas/` — JSON Schema for JudgmentResult and rubrics
+- `python/` — uv project, loguru, typesafe-sdk client
+- `rust/` — cargo crate, tracing, minreq HTTP client (`POST /v1/systemone`)
+- `skills/judge-jev/SKILL.md` — agent skill
+- `agents/` — setup and judge charters
+- `hooks/` — pre/post hooks + harness snippets
+- `adapters/` — claude-code, cursor, opencode, codex, openclaw, hermes, grok-bot
+- `fixtures/` — sample inputs for smoke/CI
+
+## Jev architecture (checklist)
+
+- Fan-out all rubric questions in one TypeSafe `system_one` call; route in code.
+- Pin model `jev-1.13.0`; log model + usage every call.
+- Filter state to rubric `state_filter` before API calls.
+- Confidence floors depend on stakes (read_only ~0.5, destructive ~0.85).
+- Noul 0.5 means uncertain, not “medium”.
+- Arithmetic/threshold enforcement stays in code, not in Jev prompts.
+- Untrusted PR/ticket/user content: fail-closed on injection signals.
+
+## TypeSafe HTTP (Rust mirrors typesafe-sdk Python)
+
+POST https://api.typesafe.ai/v1/systemone
+Authorization: Bearer $TYPESAFE_API_KEY
+Body: { "state", "model", "questions" }
+Response: { "model", "usage", "answers" }
+
+Question types: noul, choice, score.
+Answer types: { type, noul }, { type, choice, confidence, probabilities }, { type, score, confidence, probabilities }.
+
+## Exit codes
+
+0 pass, 1 fail, 2 review, 3 escalate, 4 skip
