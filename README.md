@@ -1,6 +1,8 @@
 # judge-jev
 
-Private Jev-native judge kit for LLM outputs (assistant replies, agent trajectories). Dual production runtimes share rubrics, schemas, and CLI behavior.
+> **Access:** public repo; pull requests are **collaborators-only** (sole builder [@alexhawat](https://github.com/alexhawat)). See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Jev-native judge kit for LLM outputs (assistant replies, agent trajectories). Dual production runtimes share rubrics, schemas, and CLI behavior.
 
 ## Agent-first setup
 
