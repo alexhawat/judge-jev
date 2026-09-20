@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useReactFlow } from '@xyflow/react';
 
-/** On mobile, pan/zoom to keep the active play step node on screen. */
+/** Pan/zoom to keep the active Play step node on screen (desktop + mobile). */
 export default function PlayFocusHelper({
   nodeId,
   active,
@@ -19,9 +19,9 @@ export default function PlayFocusHelper({
     const id = window.requestAnimationFrame(() => {
       void fitView({
         nodes: [{ id: nodeId }],
-        padding: 0.45,
-        duration: 320,
-        minZoom: 0.65,
+        padding: 0.42,
+        duration: 360,
+        minZoom: 0.6,
         maxZoom: 1.15,
       });
     });

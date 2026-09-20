@@ -14,8 +14,10 @@ import '@xyflow/react/dist/style.css';
 import FitViewHelper from './components/FitViewHelper';
 import FunnelNode, { type FunnelNodeData, type NodeVisualState } from './components/FunnelNode';
 import FunnelEdge from './components/FunnelEdge';
+import InspectPanel from './components/InspectPanel';
+import MobilePlaySheet from './components/MobilePlaySheet';
 import PlayFocusHelper from './components/PlayFocusHelper';
-import SidePanel, { type PanelContext } from './components/SidePanel';
+import PlayStepRail from './components/PlayStepRail';
 import Toolbar from './components/Toolbar';
 import { FUNNEL_EDGES, NODE_BY_ID } from './funnelData';
 import { useMobileLayout } from './hooks/useMediaQuery';
@@ -56,11 +58,12 @@ function FunnelDiagram({
   mobile,
   playFocusActive,
   selectionLocked,
+  resetToken,
+  ready,
   onHover,
   onNodeTap,
   onSelectionChange,
   onZoom,
-  ready,
 }: {
   baseNodes: Node<FunnelNodeData>[];
   baseEdges: Edge[];
@@ -74,15 +77,16 @@ function FunnelDiagram({
   mobile: boolean;
   playFocusActive: boolean;
   selectionLocked: boolean;
+  resetToken: number;
+  ready: boolean;
   onHover: (id: string | null) => void;
   onNodeTap: (id: string) => void;
   onSelectionChange: (params: OnSelectionChangeParams) => void;
   onZoom: (zoom: number) => void;
-  ready: boolean;
 }) {
   const playMode = Boolean(playHighlight);
-  const highlight = playHighlight ?? computeHighlight(focusId, FUNNEL_EDGES);
-  const hasFocus = Boolean(focusId || playHighlight);
+  const highlight = playHighlight ?? (focusId ? computeHighlight(focusId, FUNNEL_EDGES) : null);
+  const hasFocus = Boolean(highlight && (focusId || playHighlight));
 
   const nodes = useMemo(() => {
     return baseNodes.map((n) => {
@@ -91,7 +95,7 @@ function FunnelDiagram({
       else if (focusId === n.id && playComplete) visualState = 'selected';
       else if (hoverId === n.id && hoverId !== selectedId) visualState = 'hover';
       else if (selectedId === n.id || focusId === n.id) visualState = 'selected';
-      else if (hasFocus && !highlight.nodes.has(n.id)) visualState = 'dimmed';
+      else if (hasFocus && highlight && !highlight.nodes.has(n.id)) visualState = 'dimmed';
       const selected = selectionLocked ? n.id === focusId : selectedId === n.id;
       return { ...n, selected, data: { ...n.data, visualState } };
     });
@@ -103,13 +107,13 @@ function FunnelDiagram({
     playing,
     playComplete,
     hasFocus,
-    highlight.nodes,
+    highlight,
     selectionLocked,
   ]);
 
   const edges = useMemo(() => {
     return baseEdges.map((e) => {
-      const active = highlight.edgeIds.has(e.id);
+      const active = highlight?.edgeIds.has(e.id) ?? false;
       const dimmed = hasFocus && !active;
       const hideEdgeLabel = hideLabels || (playMode && Boolean(e.label) && !active);
       return {
@@ -118,7 +122,7 @@ function FunnelDiagram({
         data: { ...e.data, active, dimmed, hideLabel: hideEdgeLabel },
       };
     });
-  }, [baseEdges, highlight.edgeIds, hasFocus, hideLabels, playMode]);
+  }, [baseEdges, highlight, hasFocus, hideLabels, playMode]);
 
   const onMove: OnMove = useCallback(
     (_evt, viewport) => {
@@ -142,7 +146,7 @@ function FunnelDiagram({
       }}
       onNodeClick={(_, node) => onNodeTap(node.id)}
       onPaneClick={() => {
-        if (!playComplete) onHover(null);
+        if (!playComplete && !playing) onHover(null);
       }}
       onMove={onMove}
       nodesFocusable={!selectionLocked}
@@ -153,7 +157,7 @@ function FunnelDiagram({
       zoomOnPinch
       proOptions={{ hideAttribution: true }}
     >
-      <FitViewHelper ready={ready} />
+      <FitViewHelper ready={ready} resetToken={resetToken} />
       {playFocusActive && focusId ? <PlayFocusHelper nodeId={focusId} active /> : null}
       <Background gap={20} color="#2a3344" />
       <Controls showInteractive={false} className="flow-controls" />
@@ -167,9 +171,11 @@ function AppInner() {
   const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
   const [ready, setReady] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [resetToken, setResetToken] = useState(0);
 
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(() => readNodeFromUrl());
+  const [inspectOpen, setInspectOpen] = useState(false);
 
   const [scenarioId, setScenarioId] = useState(DEFAULT_SCENARIO_ID);
   const [playing, setPlaying] = useState(false);
@@ -179,11 +185,11 @@ function AppInner() {
   const [sheetExpanded, setSheetExpanded] = useState(false);
 
   const timerRef = useRef<number | null>(null);
-  /** Sync guard — RF onSelectionChange can fire before playComplete state commits. */
   const playCompleteRef = useRef(false);
   const scenario = SCENARIO_BY_ID[scenarioId];
   const hideLabels = zoom < LABEL_ZOOM_MIN;
   const currentStep = scenario?.steps[stepIndex];
+  const playActive = playing || paused || playComplete || playCompleteRef.current;
 
   useEffect(() => {
     layoutFunnel().then(({ nodes, edges }) => {
@@ -195,11 +201,11 @@ function AppInner() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (selectedId) params.set('node', selectedId);
+    if (selectedId && !playActive) params.set('node', selectedId);
     else params.delete('node');
     const qs = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
-  }, [selectedId]);
+  }, [selectedId, playActive]);
 
   const clearPlayTimer = useCallback(() => {
     if (timerRef.current != null) {
@@ -215,15 +221,18 @@ function AppInner() {
     setPaused(false);
     setPlayComplete(false);
     setStepIndex(0);
-    if (mobile) setSheetExpanded(false);
-  }, [clearPlayTimer, mobile]);
+    setHoverId(null);
+    setSelectedId(null);
+    setInspectOpen(false);
+    setSheetExpanded(false);
+    setResetToken((t) => t + 1);
+  }, [clearPlayTimer]);
 
-  const focusId =
-    playing || paused
+  const focusId = playActive
+    ? playing || paused
       ? currentStep?.nodeId ?? null
-      : playComplete
-        ? scenario?.verdictNodeId ?? null
-        : hoverId ?? selectedId;
+      : scenario?.verdictNodeId ?? null
+    : hoverId ?? selectedId;
 
   const playHighlight = useMemo(() => {
     if (!scenario) return null;
@@ -236,24 +245,12 @@ function AppInner() {
     return null;
   }, [scenario, playing, paused, playComplete, stepIndex]);
 
-  const selectionLocked = playing || paused || playComplete || playCompleteRef.current;
+  const selectionLocked = playActive;
 
-  const panelContext: PanelContext = useMemo(() => {
-    if (playing || paused || playComplete) {
-      const lastStep = scenario?.steps[scenario.steps.length - 1];
-      return {
-        mode: 'play',
-        scenario,
-        currentStep: playComplete ? lastStep : currentStep,
-        stepIndex: playComplete ? (scenario?.steps.length ?? 1) - 1 : stepIndex,
-        stepTotal: scenario?.steps.length,
-      };
-    }
-    if (selectedId || hoverId) return { mode: 'inspect' };
-    return { mode: 'idle' };
-  }, [playing, paused, playComplete, scenario, currentStep, stepIndex, selectedId, hoverId]);
-
-  const panelNode = focusId ? NODE_BY_ID[focusId] ?? null : null;
+  const displayStep = playComplete ? scenario?.steps[scenario.steps.length - 1] : currentStep;
+  const displayStepIndex = playComplete ? (scenario?.steps.length ?? 1) - 1 : stepIndex;
+  const focusMeta = focusId ? NODE_BY_ID[focusId] ?? null : null;
+  const inspectNode = selectedId ? NODE_BY_ID[selectedId] ?? null : null;
 
   const advanceStep = useCallback(() => {
     setStepIndex((prev) => {
@@ -264,6 +261,7 @@ function AppInner() {
         setPlaying(false);
         setPaused(false);
         setPlayComplete(true);
+        setInspectOpen(false);
         if (s) setSelectedId(s.verdictNodeId);
         return prev;
       }
@@ -277,8 +275,9 @@ function AppInner() {
     setPlaying(true);
     setPaused(false);
     setPlayComplete(false);
+    setInspectOpen(false);
     setSelectedId(scenario?.steps[0]?.nodeId ?? null);
-    if (mobile) setSheetExpanded(false);
+    if (mobile) setSheetExpanded(true);
   }, [scenario, mobile]);
 
   useEffect(() => {
@@ -297,16 +296,22 @@ function AppInner() {
   }, [stepIndex, playing, paused, currentStep]);
 
   useEffect(() => {
+    if (playActive && mobile) setSheetExpanded(true);
+  }, [stepIndex, playActive, mobile]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setHoverId(null);
-        setSelectedId(null);
+        if (inspectOpen) {
+          setInspectOpen(false);
+          return;
+        }
         resetPlay();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [resetPlay]);
+  }, [resetPlay, inspectOpen]);
 
   const onSelectionChange = useCallback(
     ({ nodes }: OnSelectionChangeParams) => {
@@ -314,6 +319,7 @@ function AppInner() {
       if (playCompleteRef.current || playComplete) return;
       const id = nodes.length === 1 ? nodes[0].id : null;
       setSelectedId(id);
+      setInspectOpen(Boolean(id));
       if (mobile && id) setSheetExpanded(true);
     },
     [playing, paused, playComplete, mobile],
@@ -327,11 +333,15 @@ function AppInner() {
           playCompleteRef.current = false;
           setPlayComplete(false);
           setSelectedId(id);
+          setInspectOpen(true);
           if (mobile) setSheetExpanded(true);
+        } else {
+          setInspectOpen(true);
         }
         return;
       }
       setSelectedId(id);
+      setInspectOpen(true);
       if (mobile) setSheetExpanded(true);
     },
     [playing, paused, playComplete, scenario, mobile],
@@ -340,10 +350,9 @@ function AppInner() {
   const onScenarioChange = (id: string) => {
     resetPlay();
     setScenarioId(id);
-    setSelectedId(null);
   };
 
-  const playFocusActive = mobile && (playing || playComplete) && !paused;
+  const playFocusActive = playActive && !paused;
 
   return (
     <div className={`app-shell ${mobile ? 'app-shell--mobile' : ''}`}>
@@ -370,16 +379,31 @@ function AppInner() {
         canPlay={ready}
         onPlay={() => (paused ? setPaused(false) : startPlay())}
         onPause={() => setPaused(true)}
-        onReset={() => {
-          resetPlay();
-          setSelectedId(null);
-        }}
-        stepIndex={stepIndex}
+        onReset={resetPlay}
+        stepIndex={displayStepIndex}
         stepCount={scenario?.steps.length ?? 0}
         mobile={mobile}
       />
 
-      <main className="app-main">
+      <main
+        className={[
+          'app-main',
+          playActive && !mobile ? 'app-main--play' : '',
+          !mobile && inspectOpen && inspectNode ? 'app-main--inspect' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
+        {playActive && !mobile && scenario ? (
+          <PlayStepRail
+            scenario={scenario}
+            currentStep={displayStep}
+            stepIndex={displayStepIndex}
+            stepTotal={scenario.steps.length}
+            nodeMeta={focusMeta}
+          />
+        ) : null}
+
         <div className="flow-wrap">
           {ready ? (
             <FunnelDiagram
@@ -395,6 +419,7 @@ function AppInner() {
               mobile={mobile}
               playFocusActive={playFocusActive}
               selectionLocked={selectionLocked}
+              resetToken={resetToken}
               ready={ready}
               onHover={setHoverId}
               onNodeTap={onNodeTap}
@@ -405,18 +430,28 @@ function AppInner() {
             <div className="flow-loading">Laying out funnel…</div>
           )}
         </div>
-        <SidePanel
-          node={panelNode}
-          context={panelContext}
-          mobile={mobile}
-          sheetExpanded={sheetExpanded}
-          onToggleSheet={() => setSheetExpanded((v) => !v)}
-          onClose={() => {
-            setSelectedId(null);
-            setSheetExpanded(false);
-            resetPlay();
-          }}
-        />
+
+        {!mobile && inspectOpen && inspectNode ? (
+          <InspectPanel node={inspectNode} open onClose={() => setInspectOpen(false)} />
+        ) : null}
+
+        {mobile ? (
+          <MobilePlaySheet
+            context={{
+              mode: playActive ? 'play' : inspectOpen ? 'inspect' : 'idle',
+              scenario: playActive ? scenario : undefined,
+              currentStep: playActive ? displayStep : undefined,
+              stepIndex: playActive ? displayStepIndex : undefined,
+              stepTotal: playActive ? scenario?.steps.length : undefined,
+            }}
+            node={playActive ? focusMeta : inspectNode}
+            playActive={playActive}
+            sheetExpanded={sheetExpanded}
+            inspectOpen={inspectOpen}
+            onToggleSheet={() => setSheetExpanded((v) => !v)}
+            onCloseInspect={() => setInspectOpen(false)}
+          />
+        ) : null}
       </main>
     </div>
   );

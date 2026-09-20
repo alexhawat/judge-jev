@@ -3,5 +3,5 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  base: '/judge-jev/funnel/',
+  base: '/judge-jev/funnel/v2/',
 });

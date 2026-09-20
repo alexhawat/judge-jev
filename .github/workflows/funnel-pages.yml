@@ -25,20 +25,37 @@ jobs:
           cache: npm
           cache-dependency-path: web/funnel/package-lock.json
 
-      - name: Install and build funnel app
+      - name: Install and build funnel app (v2)
         working-directory: web/funnel
         run: |
           npm ci
           npm run build
 
-      # Publishes to gh-pages branch under funnel/ →
-      # https://alexhawat.github.io/judge-jev/funnel/
-      # One-time repo setting: Settings → Pages → Source = Deploy from branch → gh-pages / (root)
+      - name: Prepare gh-pages tree with v2 + redirect
+        run: |
+          mkdir -p deploy-root/funnel/v2
+          cp -r web/funnel/dist/* deploy-root/funnel/v2/
+          cat > deploy-root/funnel/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="UTF-8" />
+              <meta http-equiv="refresh" content="0;url=v2/" />
+              <meta http-equiv="Cache-Control" content="no-cache" />
+              <title>Redirecting to funnel v2…</title>
+              <link rel="canonical" href="v2/" />
+            </head>
+            <body>
+              <p><a href="v2/">Open judge-jev funnel v2</a></p>
+            </body>
+          </html>
+          HTML
+
+      # https://alexhawat.github.io/judge-jev/funnel/v2/
       - name: Deploy to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./web/funnel/dist
+          publish_dir: ./deploy-root
           publish_branch: gh-pages
-          destination_dir: funnel
           force_orphan: true

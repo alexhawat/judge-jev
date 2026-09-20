@@ -1,12 +1,28 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useReactFlow } from '@xyflow/react';
 
-/** Zoom in after initial layout so the vertical funnel fills the canvas. */
-export default function FitViewHelper({ ready }: { ready: boolean }) {
+/** Initial zoom-in after layout; full-funnel fitView when resetToken increments. */
+export default function FitViewHelper({
+  ready,
+  resetToken,
+}: {
+  ready: boolean;
+  resetToken: number;
+}) {
   const { fitView, getViewport, setViewport } = useReactFlow();
+  const didInitial = useRef(false);
 
   useEffect(() => {
     if (!ready) return;
+
+    if (resetToken > 0) {
+      void fitView({ padding: 0.1, duration: 380, minZoom: 0.55, maxZoom: 1.35 });
+      return;
+    }
+
+    if (didInitial.current) return;
+    didInitial.current = true;
+
     const id = window.requestAnimationFrame(() => {
       void fitView({ padding: 0.1, duration: 0, minZoom: 0.55, maxZoom: 1.35 });
       window.setTimeout(() => {
@@ -16,7 +32,7 @@ export default function FitViewHelper({ ready }: { ready: boolean }) {
       }, 50);
     });
     return () => window.cancelAnimationFrame(id);
-  }, [ready, fitView, getViewport, setViewport]);
+  }, [ready, resetToken, fitView, getViewport, setViewport]);
 
   return null;
 }
