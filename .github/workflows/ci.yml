@@ -87,6 +87,19 @@ jobs:
       - name: Examples behave as documented (rust)
         run: JUDGE_JEV_RUNTIME=rust bash examples/run-all.sh
 
+  # The mergeCraft Action pin is written twice in one workflow — the `uses:` ref
+  # GitHub resolves, and MERGECRAFT_ACTION_SHA, which the container reads to record
+  # what it ran. A bump that touches one and not the other is invisible at runtime:
+  # the job still passes, and its run record attests to the wrong commit. Upstream
+  # guards its own copy with `make action-pin-check`; a consumer install inherits
+  # nothing, so the rule is enforced here.
+  action-pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Action pin and MERGECRAFT_ACTION_SHA must agree
+        run: bash scripts/check-action-pin.sh
+
   schemas:
     runs-on: ubuntu-latest
     steps:
