@@ -87,6 +87,37 @@ jobs:
       - name: Examples behave as documented (rust)
         run: JUDGE_JEV_RUNTIME=rust bash examples/run-all.sh
 
+  # mergeCraft's action pin is written twice in one file: the `uses:` ref, and the
+  # MERGECRAFT_ACTION_SHA the container reads because `uses:` is not visible from
+  # inside the image. Bump one and not the other and the review still runs, but
+  # reports a pin it is not running — the failure upstream guards with
+  # `make action-pin-check`. A consumer install inherits none of that tooling, so
+  # this is that check, scoped to the one thing that can silently drift.
+  mergecraft-pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Action ref and MERGECRAFT_ACTION_SHA must agree
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          wf = pathlib.Path(".github/workflows/mergecraft.yml").read_text()
+          refs = re.findall(r"uses:\s*alexhawat/mergeCraft@(\S+)", wf)
+          envs = re.findall(r"MERGECRAFT_ACTION_SHA:\s*(\S+)", wf)
+
+          if not refs or not envs:
+              sys.exit(f"could not find the pin: {len(refs)} uses ref(s), {len(envs)} env value(s)")
+          if len(set(refs)) != 1 or len(set(envs)) != 1:
+              sys.exit(f"pin is not uniform: uses={sorted(set(refs))} env={sorted(set(envs))}")
+          if refs[0] != envs[0]:
+              sys.exit(
+                  f"half-bumped pin: uses alexhawat/mergeCraft@{refs[0]} "
+                  f"but MERGECRAFT_ACTION_SHA={envs[0]}"
+              )
+          print(f"ok mergeCraft pin: {refs[0]}")
+          PY
+
   schemas:
     runs-on: ubuntu-latest
     steps:
