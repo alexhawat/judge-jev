@@ -6,7 +6,9 @@ import InspectPanel from './InspectPanel';
 type Props = {
   context: PanelContext;
   node: FunnelNodeMeta | null;
-  playActive: boolean;
+  playInProgress: boolean;
+  playComplete: boolean;
+  showPlayContent: boolean;
   sheetExpanded: boolean;
   inspectOpen: boolean;
   onToggleSheet: () => void;
@@ -77,18 +79,21 @@ function PlaySheetBody({ context, node }: { context: PanelContext; node: FunnelN
 export default function MobilePlaySheet({
   context,
   node,
-  playActive,
+  playInProgress,
+  playComplete,
+  showPlayContent,
   sheetExpanded,
   inspectOpen,
   onToggleSheet,
   onCloseInspect,
 }: Props) {
-  const hasContent = playActive || (inspectOpen && node);
-  const expanded = playActive || sheetExpanded;
+  const hasContent = showPlayContent || (inspectOpen && node);
+  const expanded = playInProgress || sheetExpanded;
   const peekTitle =
     context.mode === 'play' && context.currentStep
       ? context.currentStep.stepNote
       : node?.title ?? 'Details';
+  const peekLabel = playInProgress ? 'Playing' : playComplete ? 'Finished' : 'Details';
 
   if (!hasContent) return null;
 
@@ -96,7 +101,7 @@ export default function MobilePlaySheet({
     <>
       {!expanded ? (
         <button type="button" className="sheet-peek" onClick={onToggleSheet} aria-expanded={false}>
-          <span className="sheet-peek-label">{playActive ? 'Playing' : 'Details'}</span>
+          <span className="sheet-peek-label">{peekLabel}</span>
           <span className="sheet-peek-text">{peekTitle}</span>
           <span className="sheet-peek-chevron" aria-hidden>
             ▲
@@ -109,7 +114,8 @@ export default function MobilePlaySheet({
           'side-panel',
           'side-panel--mobile',
           'is-open',
-          playActive ? 'side-panel--play' : '',
+          playInProgress ? 'side-panel--play' : '',
+          playComplete && !playInProgress ? 'side-panel--complete' : '',
           expanded ? 'side-panel--expanded' : 'side-panel--collapsed',
         ]
           .filter(Boolean)
@@ -118,7 +124,7 @@ export default function MobilePlaySheet({
         <button type="button" className="sheet-handle" onClick={onToggleSheet} aria-label="Toggle details">
           <span className="sheet-handle-bar" />
         </button>
-        {inspectOpen && node && !playActive ? (
+        {inspectOpen && node && !showPlayContent ? (
           <InspectPanel node={node} open onClose={onCloseInspect} />
         ) : (
           <PlaySheetBody context={context} node={node} />

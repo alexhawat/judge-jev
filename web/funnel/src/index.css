@@ -41,6 +41,8 @@ body {
 }
 
 .app-header {
+  position: relative;
+  z-index: 50;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -102,6 +104,9 @@ body {
 }
 
 .toolbar {
+  position: relative;
+  z-index: 50;
+  isolation: isolate;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -179,10 +184,12 @@ body {
 }
 
 .app-main {
+  position: relative;
   flex: 1;
   display: grid;
   grid-template-columns: 1fr;
   min-height: 0;
+  z-index: 1;
 }
 
 .app-main--inspect {
@@ -679,11 +686,11 @@ body {
   }
 
   .side-panel--mobile {
-    position: fixed;
+    position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 30;
+    z-index: 20;
     border-left: none;
     border-top: 1px solid var(--border);
     border-radius: 14px 14px 0 0;
@@ -706,6 +713,10 @@ body {
 
   .side-panel--mobile.side-panel--play.side-panel--expanded {
     max-height: min(52vh, 420px);
+  }
+
+  .side-panel--mobile.side-panel--complete:not(.side-panel--expanded) {
+    pointer-events: none;
   }
 
   .side-panel--mobile.side-panel--collapsed {
@@ -732,11 +743,11 @@ body {
   }
 
   .sheet-peek {
-    position: fixed;
+    position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 25;
+    z-index: 19;
     display: flex;
     align-items: center;
     gap: 8px;

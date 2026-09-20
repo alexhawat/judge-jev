@@ -189,7 +189,8 @@ function AppInner() {
   const scenario = SCENARIO_BY_ID[scenarioId];
   const hideLabels = zoom < LABEL_ZOOM_MIN;
   const currentStep = scenario?.steps[stepIndex];
-  const playActive = playing || paused || playComplete || playCompleteRef.current;
+  const playInProgress = playing || paused;
+  const playActive = playInProgress || playComplete || playCompleteRef.current;
 
   useEffect(() => {
     layoutFunnel().then(({ nodes, edges }) => {
@@ -296,8 +297,12 @@ function AppInner() {
   }, [stepIndex, playing, paused, currentStep]);
 
   useEffect(() => {
-    if (playActive && mobile) setSheetExpanded(true);
-  }, [stepIndex, playActive, mobile]);
+    if (playInProgress && mobile) setSheetExpanded(true);
+  }, [stepIndex, playInProgress, mobile]);
+
+  useEffect(() => {
+    if (playComplete && mobile) setSheetExpanded(false);
+  }, [playComplete, mobile]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -347,10 +352,13 @@ function AppInner() {
     [playing, paused, playComplete, scenario, mobile],
   );
 
-  const onScenarioChange = (id: string) => {
-    resetPlay();
-    setScenarioId(id);
-  };
+  const onScenarioChange = useCallback(
+    (id: string) => {
+      resetPlay();
+      setScenarioId(id);
+    },
+    [resetPlay],
+  );
 
   const playFocusActive = playActive && !paused;
 
@@ -377,7 +385,10 @@ function AppInner() {
         playing={playing}
         paused={paused}
         canPlay={ready}
-        onPlay={() => (paused ? setPaused(false) : startPlay())}
+        onPlay={() => {
+          if (paused) setPaused(false);
+          else startPlay();
+        }}
         onPause={() => setPaused(true)}
         onReset={resetPlay}
         stepIndex={displayStepIndex}
@@ -445,7 +456,9 @@ function AppInner() {
               stepTotal: playActive ? scenario?.steps.length : undefined,
             }}
             node={playActive ? focusMeta : inspectNode}
-            playActive={playActive}
+            playInProgress={playInProgress}
+            playComplete={playComplete}
+            showPlayContent={playActive}
             sheetExpanded={sheetExpanded}
             inspectOpen={inspectOpen}
             onToggleSheet={() => setSheetExpanded((v) => !v)}
