@@ -61,7 +61,12 @@ All adapters invoke `./scripts/judge-jev` so runtime selection stays in `.judge-
 ```bash
 ./scripts/judge-jev run --rubric assistant-reply --input fixtures/assistant-reply-pass.json --mock
 ./scripts/judge-jev rubric list
+bash examples/run-all.sh
 ```
+
+`examples/` holds six runnable end-to-end examples (see `examples/README.md`); they
+run mocked and offline, and `run-all.sh` checks each still reaches the verdict it
+documents.
 
 Expect JSON on stdout (`JudgmentResult`) and logs on stderr. Verdict exit codes are
 `0` pass, `1` fail, `2` review, `3` escalate, `4` skip; `10`/`11` mean the judgment did
