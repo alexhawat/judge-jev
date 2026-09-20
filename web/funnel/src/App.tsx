@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background,
   Controls,
-  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   type Edge,
@@ -15,9 +14,11 @@ import '@xyflow/react/dist/style.css';
 import FitViewHelper from './components/FitViewHelper';
 import FunnelNode, { type FunnelNodeData, type NodeVisualState } from './components/FunnelNode';
 import FunnelEdge from './components/FunnelEdge';
+import PlayFocusHelper from './components/PlayFocusHelper';
 import SidePanel, { type PanelContext } from './components/SidePanel';
 import Toolbar from './components/Toolbar';
 import { FUNNEL_EDGES, NODE_BY_ID } from './funnelData';
+import { useMobileLayout } from './hooks/useMediaQuery';
 import { computeHighlight, computePlayHighlight } from './pathUtils';
 import { DEFAULT_SCENARIO_ID, SCENARIO_BY_ID, type PlayScenario } from './scenarios';
 import { layoutFunnel } from './layoutElk';
@@ -51,7 +52,10 @@ function FunnelDiagram({
   playing,
   playHighlight,
   hideLabels,
+  mobile,
+  playFocusActive,
   onHover,
+  onNodeTap,
   onSelectionChange,
   onZoom,
   ready,
@@ -64,7 +68,10 @@ function FunnelDiagram({
   playing: boolean;
   playHighlight: ReturnType<typeof computePlayHighlight> | null;
   hideLabels: boolean;
+  mobile: boolean;
+  playFocusActive: boolean;
   onHover: (id: string | null) => void;
+  onNodeTap: (id: string) => void;
   onSelectionChange: (params: OnSelectionChangeParams) => void;
   onZoom: (zoom: number) => void;
   ready: boolean;
@@ -109,31 +116,31 @@ function FunnelDiagram({
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onSelectionChange={onSelectionChange}
-      onNodeMouseEnter={(_, node) => onHover(node.id)}
-      onNodeMouseLeave={() => onHover(null)}
+      onNodeMouseEnter={(_, node) => {
+        if (!mobile) onHover(node.id);
+      }}
+      onNodeMouseLeave={() => {
+        if (!mobile) onHover(null);
+      }}
+      onNodeClick={(_, node) => onNodeTap(node.id)}
       onPaneClick={() => onHover(null)}
       onMove={onMove}
       minZoom={0.55}
       maxZoom={1.6}
+      panOnScroll={false}
+      zoomOnPinch
       proOptions={{ hideAttribution: true }}
     >
       <FitViewHelper ready={ready} />
+      {playFocusActive && focusId ? <PlayFocusHelper nodeId={focusId} active /> : null}
       <Background gap={20} color="#2a3344" />
-      <Controls showInteractive={false} />
-      <MiniMap
-        nodeColor={(n) => {
-          const kind = (n.data as FunnelNodeData)?.meta?.kind;
-          if (kind === 'jev') return '#7c5cff';
-          if (kind === 'verdict') return '#3ecf8e';
-          return '#4a90d9';
-        }}
-        maskColor="rgba(10, 14, 22, 0.75)"
-      />
+      <Controls showInteractive={false} className="flow-controls" />
     </ReactFlow>
   );
 }
 
 function AppInner() {
+  const mobile = useMobileLayout();
   const [baseNodes, setBaseNodes] = useState<Node<FunnelNodeData>[]>([]);
   const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
   const [ready, setReady] = useState(false);
@@ -146,6 +153,7 @@ function AppInner() {
   const [playing, setPlaying] = useState(false);
   const [paused, setPaused] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
+  const [sheetExpanded, setSheetExpanded] = useState(false);
 
   const timerRef = useRef<number | null>(null);
   const scenario = SCENARIO_BY_ID[scenarioId];
@@ -180,7 +188,8 @@ function AppInner() {
     setPlaying(false);
     setPaused(false);
     setStepIndex(0);
-  }, [clearPlayTimer]);
+    if (mobile) setSheetExpanded(false);
+  }, [clearPlayTimer, mobile]);
 
   const focusId =
     playing || paused ? currentStep?.nodeId ?? null : hoverId ?? selectedId;
@@ -223,7 +232,8 @@ function AppInner() {
     setPlaying(true);
     setPaused(false);
     setSelectedId(scenario?.steps[0]?.nodeId ?? null);
-  }, [scenario]);
+    if (mobile) setSheetExpanded(false);
+  }, [scenario, mobile]);
 
   useEffect(() => {
     if (!playing || paused || !currentStep) {
@@ -255,9 +265,20 @@ function AppInner() {
   const onSelectionChange = useCallback(
     ({ nodes }: OnSelectionChangeParams) => {
       if (playing && !paused) return;
-      setSelectedId(nodes.length === 1 ? nodes[0].id : null);
+      const id = nodes.length === 1 ? nodes[0].id : null;
+      setSelectedId(id);
+      if (mobile && id) setSheetExpanded(true);
     },
-    [playing, paused],
+    [playing, paused, mobile],
+  );
+
+  const onNodeTap = useCallback(
+    (id: string) => {
+      if (playing && !paused) return;
+      setSelectedId(id);
+      if (mobile) setSheetExpanded(true);
+    },
+    [playing, paused, mobile],
   );
 
   const onScenarioChange = (id: string) => {
@@ -266,10 +287,12 @@ function AppInner() {
     setSelectedId(null);
   };
 
+  const playFocusActive = mobile && playing && !paused;
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${mobile ? 'app-shell--mobile' : ''}`}>
       <header className="app-header">
-        <div>
+        <div className="app-header-main">
           <h1>judge-jev judgment funnel</h1>
           <p className="app-tagline">
             screen → profile → locate → score → route — one TypeSafe <code>system_one</code> call,
@@ -297,6 +320,7 @@ function AppInner() {
         }}
         stepIndex={stepIndex}
         stepCount={scenario?.steps.length ?? 0}
+        mobile={mobile}
       />
 
       <main className="app-main">
@@ -311,10 +335,11 @@ function AppInner() {
               playing={playing && !paused}
               playHighlight={playHighlight}
               hideLabels={hideLabels}
+              mobile={mobile}
+              playFocusActive={playFocusActive}
               ready={ready}
-              onHover={(id) => {
-                if (!playing || paused) setHoverId(id);
-              }}
+              onHover={setHoverId}
+              onNodeTap={onNodeTap}
               onSelectionChange={onSelectionChange}
               onZoom={setZoom}
             />
@@ -325,8 +350,12 @@ function AppInner() {
         <SidePanel
           node={panelNode}
           context={panelContext}
+          mobile={mobile}
+          sheetExpanded={sheetExpanded}
+          onToggleSheet={() => setSheetExpanded((v) => !v)}
           onClose={() => {
             setSelectedId(null);
+            setSheetExpanded(false);
             resetPlay();
           }}
         />

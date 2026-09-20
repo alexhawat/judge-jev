@@ -12,6 +12,9 @@ export type PanelContext = {
 type Props = {
   node: FunnelNodeMeta | null;
   context: PanelContext;
+  mobile: boolean;
+  sheetExpanded: boolean;
+  onToggleSheet: () => void;
   onClose: () => void;
 };
 
@@ -28,8 +31,17 @@ function formatMockAnswer(key: string, answer: PlayScenario['mockAnswers'][strin
   return key;
 }
 
-export default function SidePanel({ node, context, onClose }: Props) {
+export default function SidePanel({
+  node,
+  context,
+  mobile,
+  sheetExpanded,
+  onToggleSheet,
+  onClose,
+}: Props) {
   const { scenario, mode, currentStep, stepIndex, stepTotal } = context;
+  const hasContent = Boolean(node || mode === 'play' || mode === 'inspect');
+  const showSheet = mobile && hasContent;
 
   const stepAnswers =
     mode === 'play' && scenario && currentStep?.showAnswers?.length
@@ -38,73 +50,113 @@ export default function SidePanel({ node, context, onClose }: Props) {
           .map((k) => [k, scenario.mockAnswers[k]] as const)
       : [];
 
-  return (
-    <aside className={`side-panel ${node || mode === 'play' ? 'is-open' : ''}`} aria-live="polite">
-      <div className="side-panel-header">
-        <h2>{node ? node.title : mode === 'play' ? 'Playing sample' : 'Explore the funnel'}</h2>
-        {node ? (
-          <button type="button" className="side-panel-close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        ) : null}
-      </div>
+  const peekTitle =
+    mode === 'play' && currentStep
+      ? currentStep.stepNote
+      : node
+        ? node.title
+        : 'Details';
 
-      {mode === 'play' && scenario ? (
-        <div className="side-panel-play-banner">
-          <div className="play-fixture-name">{scenario.label}</div>
-          {stepIndex != null && stepTotal ? (
-            <div className="play-step-counter">
-              Step {stepIndex + 1} of {stepTotal}
-            </div>
-          ) : null}
-          {currentStep ? (
-            <p className="play-step-note">{currentStep.stepNote}</p>
-          ) : (
-            <p className="play-summary">{scenario.summary}</p>
-          )}
-          {stepAnswers.length > 0 ? (
-            <div className="play-answers-now">
-              {stepAnswers.map(([k, v]) => (
-                <div key={k} className="play-answer-row">
-                  <span className="play-answer-key">{k}</span>
-                  <span className="play-answer-val">{formatMockAnswer(k, v)}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="play-verdict-chip" data-verdict={scenario.verdict}>
-            target → {scenario.verdict}
-            {scenario.confidence > 0 ? ` · confidence ${scenario.confidence.toFixed(2)}` : ''}
-          </div>
-          {scenario.decidingAnswers.length > 0 ? (
-            <p className="play-deciding">deciding_answers: {scenario.decidingAnswers.join(', ')}</p>
-          ) : null}
-          {currentStep?.nodeId === scenario.verdictNodeId ? (
-            <p className="play-routing-reason">{scenario.routingReason}</p>
-          ) : null}
-        </div>
+  const panelClasses = [
+    'side-panel',
+    hasContent ? 'is-open' : '',
+    mobile ? 'side-panel--mobile' : '',
+    showSheet && sheetExpanded ? 'side-panel--expanded' : '',
+    showSheet && !sheetExpanded ? 'side-panel--collapsed' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return (
+    <>
+      {mobile && hasContent && !sheetExpanded ? (
+        <button type="button" className="sheet-peek" onClick={onToggleSheet} aria-expanded={false}>
+          <span className="sheet-peek-label">{mode === 'play' ? 'Playing' : 'Details'}</span>
+          <span className="sheet-peek-text">{peekTitle}</span>
+          <span className="sheet-peek-chevron" aria-hidden>
+            ▲
+          </span>
+        </button>
       ) : null}
 
-      {node ? (
-        <div className="side-panel-body">
-          <p className="side-panel-kind">{node.kind === 'jev' ? 'Jev API call' : node.kind}</p>
-          <p>{node.body}</p>
-          {node.bullets?.length ? (
-            <ul>
-              {node.bullets.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
+      <aside className={panelClasses} aria-live="polite">
+        {mobile && hasContent ? (
+          <button
+            type="button"
+            className="sheet-handle"
+            onClick={onToggleSheet}
+            aria-label={sheetExpanded ? 'Collapse details' : 'Expand details'}
+          >
+            <span className="sheet-handle-bar" />
+          </button>
+        ) : null}
+
+        <div className="side-panel-header">
+          <h2>{node ? node.title : mode === 'play' ? 'Playing sample' : 'Explore the funnel'}</h2>
+          {node && !mobile ? (
+            <button type="button" className="side-panel-close" onClick={onClose} aria-label="Close">
+              ×
+            </button>
           ) : null}
-          {node.codeRef ? <p className="side-panel-ref">Code: {node.codeRef}</p> : null}
         </div>
-      ) : (
-        <div className="side-panel-body side-panel-hint">
-          <p>Hover or click nodes to highlight the path from Input. Edge labels show real assistant-reply routing snippets.</p>
-          <p>Pick a fixture and press <strong>Play</strong> — each scenario follows its own deciding path.</p>
-          <p>Press <kbd>Esc</kbd> to clear selection and path highlight.</p>
-        </div>
-      )}
-    </aside>
+
+        {mode === 'play' && scenario ? (
+          <div className="side-panel-play-banner">
+            <div className="play-fixture-name">{scenario.label}</div>
+            {stepIndex != null && stepTotal ? (
+              <div className="play-step-counter">
+                Step {stepIndex + 1} of {stepTotal}
+              </div>
+            ) : null}
+            {currentStep ? (
+              <p className="play-step-note">{currentStep.stepNote}</p>
+            ) : (
+              <p className="play-summary">{scenario.summary}</p>
+            )}
+            {stepAnswers.length > 0 ? (
+              <div className="play-answers-now">
+                {stepAnswers.map(([k, v]) => (
+                  <div key={k} className="play-answer-row">
+                    <span className="play-answer-key">{k}</span>
+                    <span className="play-answer-val">{formatMockAnswer(k, v)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="play-verdict-chip" data-verdict={scenario.verdict}>
+              target → {scenario.verdict}
+              {scenario.confidence > 0 ? ` · confidence ${scenario.confidence.toFixed(2)}` : ''}
+            </div>
+            {scenario.decidingAnswers.length > 0 ? (
+              <p className="play-deciding">deciding_answers: {scenario.decidingAnswers.join(', ')}</p>
+            ) : null}
+            {currentStep?.nodeId === scenario.verdictNodeId ? (
+              <p className="play-routing-reason">{scenario.routingReason}</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {node ? (
+          <div className="side-panel-body">
+            <p className="side-panel-kind">{node.kind === 'jev' ? 'Jev API call' : node.kind}</p>
+            <p>{node.body}</p>
+            {node.bullets?.length ? (
+              <ul>
+                {node.bullets.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : null}
+            {node.codeRef ? <p className="side-panel-ref">Code: {node.codeRef}</p> : null}
+          </div>
+        ) : !mobile ? (
+          <div className="side-panel-body side-panel-hint">
+            <p>Tap or click nodes to highlight the path from Input. Edge labels show real assistant-reply routing snippets.</p>
+            <p>Pick a fixture and press <strong>Play</strong> — each scenario follows its own deciding path.</p>
+            <p>Press <kbd>Esc</kbd> to clear selection and path highlight.</p>
+          </div>
+        ) : null}
+      </aside>
+    </>
   );
 }
