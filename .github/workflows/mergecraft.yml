@@ -19,9 +19,14 @@ permissions:
 
 jobs:
   mergecraft:
+    # CONTRIBUTING.md: a workflow that needs secrets gates on same-repo heads.
+    # A fork's pull_request head receives no secrets, so without this the job
+    # runs, finds no credential, and fails instead of skipping. Matches the gate
+    # mergeCraft's own workflow puts on every rung.
     if: >
-      github.event_name == 'pull_request' ||
-      github.event_name == 'workflow_dispatch'
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
