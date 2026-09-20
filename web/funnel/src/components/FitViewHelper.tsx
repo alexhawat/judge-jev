@@ -16,7 +16,11 @@ export default function FitViewHelper({
     if (!ready) return;
 
     if (resetToken > 0) {
-      void fitView({ padding: 0.1, duration: 380, minZoom: 0.55, maxZoom: 1.35 });
+      try {
+        void fitView({ padding: 0.1, duration: 380, minZoom: 0.55, maxZoom: 1.35 });
+      } catch {
+        /* RF store may be mid-update; ignore */
+      }
       return;
     }
 

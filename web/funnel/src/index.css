@@ -280,6 +280,34 @@ body {
   font-size: 1.05rem;
 }
 
+.flow-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  padding: 24px;
+  color: #fecaca;
+  background: #1a1212;
+  border: 1px solid #5a2020;
+  border-radius: 10px;
+  margin: 12px;
+}
+
+.flow-error-title {
+  margin: 0;
+  font-weight: 650;
+  font-size: 1.05rem;
+}
+
+.flow-error-detail {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #fca5a5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .side-panel {
   border-left: 1px solid var(--border);
   background: var(--panel);

@@ -7,11 +7,11 @@ import {
   type Edge,
   type Node,
   type OnMove,
-  type OnSelectionChangeParams,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
 import FitViewHelper from './components/FitViewHelper';
+import FunnelErrorBoundary from './components/FunnelErrorBoundary';
 import FunnelNode, { type FunnelNodeData, type NodeVisualState } from './components/FunnelNode';
 import FunnelEdge from './components/FunnelEdge';
 import InspectPanel from './components/InspectPanel';
@@ -62,7 +62,7 @@ function FunnelDiagram({
   ready,
   onHover,
   onNodeTap,
-  onSelectionChange,
+  onClearSelection,
   onZoom,
 }: {
   baseNodes: Node<FunnelNodeData>[];
@@ -80,7 +80,7 @@ function FunnelDiagram({
   ready: boolean;
   onHover: (id: string | null) => void;
   onNodeTap: (id: string) => void;
-  onSelectionChange: (params: OnSelectionChangeParams) => void;
+  onClearSelection: () => void;
   onZoom: (zoom: number) => void;
 }) {
   const playComplete = phase === 'complete';
@@ -138,7 +138,6 @@ function FunnelDiagram({
       edges={edges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
-      onSelectionChange={selectionLocked ? undefined : onSelectionChange}
       onNodeMouseEnter={(_, node) => {
         if (!mobile && !playComplete) onHover(node.id);
       }}
@@ -147,7 +146,10 @@ function FunnelDiagram({
       }}
       onNodeClick={(_, node) => onNodeTap(node.id)}
       onPaneClick={() => {
-        if (!playComplete && !playing) onHover(null);
+        if (!playComplete && !playing) {
+          onHover(null);
+          onClearSelection();
+        }
       }}
       onMove={onMove}
       nodesFocusable={!selectionLocked}
@@ -244,6 +246,7 @@ function AppInner() {
 
   const onScenarioChange = useCallback(
     (id: string) => {
+      if (!SCENARIO_BY_ID[id]) return;
       bumpPlayGen();
       clearPlayTimer();
       setPhase('idle');
@@ -347,17 +350,11 @@ function AppInner() {
     return () => window.removeEventListener('keydown', onKey);
   }, [resetPlay, inspectOpen]);
 
-  const onSelectionChange = useCallback(
-    ({ nodes }: OnSelectionChangeParams) => {
-      if (phase === 'playing') return;
-      if (phase === 'complete') return;
-      const id = nodes.length === 1 ? nodes[0].id : null;
-      setSelectedId(id);
-      setInspectOpen(Boolean(id));
-      if (mobile && id) setSheetExpanded(true);
-    },
-    [phase, mobile],
-  );
+  const onClearSelection = useCallback(() => {
+    if (phase !== 'idle') return;
+    setSelectedId(null);
+    setInspectOpen(false);
+  }, [phase]);
 
   const onNodeTap = useCallback(
     (id: string) => {
@@ -381,7 +378,6 @@ function AppInner() {
   );
 
   const playFocusActive = playInProgress;
-  const flowRemountKey = `${scenarioId}-${resetToken}`;
 
   return (
     <div className={`app-shell ${mobile ? 'app-shell--mobile' : ''}`}>
@@ -436,30 +432,31 @@ function AppInner() {
         ) : null}
 
         <div className="flow-wrap">
-          {ready ? (
-            <FunnelDiagram
-              key={flowRemountKey}
-              baseNodes={baseNodes}
-              baseEdges={baseEdges}
-              focusId={focusId}
-              hoverId={hoverId}
-              selectedId={selectedId}
-              phase={phase}
-              playHighlight={playHighlight}
-              hideLabels={hideLabels}
-              mobile={mobile}
-              playFocusActive={playFocusActive}
-              selectionLocked={selectionLocked}
-              resetToken={resetToken}
-              ready={ready}
-              onHover={setHoverId}
-              onNodeTap={onNodeTap}
-              onSelectionChange={onSelectionChange}
+          <FunnelErrorBoundary onRetry={() => setResetToken((t) => t + 1)}>
+            {ready ? (
+              <FunnelDiagram
+                baseNodes={baseNodes}
+                baseEdges={baseEdges}
+                focusId={focusId}
+                hoverId={hoverId}
+                selectedId={selectedId}
+                phase={phase}
+                playHighlight={playHighlight}
+                hideLabels={hideLabels}
+                mobile={mobile}
+                playFocusActive={playFocusActive}
+                selectionLocked={selectionLocked}
+                resetToken={resetToken}
+                ready={ready}
+                onHover={setHoverId}
+                onNodeTap={onNodeTap}
+              onClearSelection={onClearSelection}
               onZoom={setZoom}
-            />
-          ) : (
-            <div className="flow-loading">Laying out funnel…</div>
-          )}
+              />
+            ) : (
+              <div className="flow-loading">Laying out funnel…</div>
+            )}
+          </FunnelErrorBoundary>
         </div>
 
         {!mobile && inspectOpen && inspectNode ? (
