@@ -1,0 +1,4 @@
+# Sole maintainer. protect-main ruleset requires code-owner review on main.
+# Alex is the only builder — fork PRs cannot be opened by non-collaborators
+# (pull_request_creation_policy=collaborators_only, same as mergeCraft).
+* @alexhawat
