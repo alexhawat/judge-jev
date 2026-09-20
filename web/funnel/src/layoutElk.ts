@@ -1,0 +1,59 @@
+import ELK from 'elkjs/lib/elk.bundled.js';
+import type { Edge, Node } from '@xyflow/react';
+import { FUNNEL_EDGES, FUNNEL_NODES, type FunnelNodeMeta } from './funnelData';
+import type { FunnelNodeData } from './components/FunnelNode';
+
+const elk = new ELK();
+
+const NODE_WIDTH = 168;
+const NODE_HEIGHT = 64;
+
+export async function layoutFunnel(): Promise<{ nodes: Node<FunnelNodeData>[]; edges: Edge[] }> {
+  const graph = {
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': 'RIGHT',
+      'elk.spacing.nodeNode': '36',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '56',
+      'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+    },
+    children: FUNNEL_NODES.map((meta) => ({
+      id: meta.id,
+      width: meta.kind === 'jev' ? 200 : NODE_WIDTH,
+      height: meta.subtitle ? NODE_HEIGHT + 12 : NODE_HEIGHT,
+    })),
+    edges: FUNNEL_EDGES.map((e, i) => ({
+      id: `e-${i}`,
+      sources: [e.source],
+      targets: [e.target],
+    })),
+  };
+
+  const laidOut = await elk.layout(graph);
+
+  const posById = new Map(
+    (laidOut.children ?? []).map((c) => [c.id, { x: c.x ?? 0, y: c.y ?? 0 }]),
+  );
+
+  const nodes: Node<FunnelNodeData>[] = FUNNEL_NODES.map((meta: FunnelNodeMeta) => {
+    const pos = posById.get(meta.id) ?? { x: 0, y: 0 };
+    return {
+      id: meta.id,
+      type: 'funnel',
+      position: pos,
+      data: { meta },
+    };
+  });
+
+  const edges: Edge[] = FUNNEL_EDGES.map((e, i) => ({
+    id: `e-${i}`,
+    source: e.source,
+    target: e.target,
+    label: e.label,
+    animated: e.source === 'jev-call' || e.source === 'route',
+    className: e.label ? 'edge-labeled' : undefined,
+  }));
+
+  return { nodes, edges };
+}

@@ -1,0 +1,267 @@
+export type NodeKind = 'stage' | 'jev' | 'verdict';
+
+export interface FunnelNodeMeta {
+  id: string;
+  label: string;
+  subtitle?: string;
+  kind: NodeKind;
+  stageKey?: string;
+  title: string;
+  body: string;
+  bullets?: string[];
+  codeRef?: string;
+}
+
+export const FUNNEL_NODES: FunnelNodeMeta[] = [
+  {
+    id: 'input',
+    label: 'Input',
+    subtitle: 'JSON artifact',
+    kind: 'stage',
+    title: 'Input JSON',
+    body: 'The CLI loads a JSON object from disk — an assistant reply or agent trajectory under test.',
+    bullets: [
+      'assistant-reply: prompt, reply, optional context',
+      'agent-trajectory: goal, steps, final_output',
+      'Optional _mock_answers for deterministic CI (--mock)',
+    ],
+    codeRef: 'funnel.py → load_input()',
+  },
+  {
+    id: 'state-filter',
+    label: 'State filter',
+    subtitle: 'rubric.state_filter',
+    kind: 'stage',
+    title: 'State filter',
+    body: 'Only keys declared in the rubric state_filter are kept. Irrelevant blobs never reach TypeSafe.',
+    bullets: [
+      'Strips _mock_answers before the API call',
+      'Missing keys are logged; questions judge absent data',
+      'Example (assistant-reply): prompt, reply, context',
+    ],
+    codeRef: 'typesafe_client.py → filter_state()',
+  },
+  {
+    id: 'jev-call',
+    label: 'TypeSafe system_one',
+    subtitle: 'jev-1.13.0 · one batched call',
+    kind: 'jev',
+    title: 'Single batched Jev call',
+    body: 'All rubric questions fan out in one TypeSafe system_one request. Model is pinned per rubric (e.g. jev-1.13.0).',
+    bullets: [
+      'build_questions() converts every rubric question to Noul / Choice / Score',
+      '--mock uses deterministic answers without TYPESAFE_API_KEY',
+      'Returns answers, token usage, and request_id',
+    ],
+    codeRef: 'funnel.py → engine.system_one()',
+  },
+  {
+    id: 'screen',
+    label: 'Screen',
+    subtitle: 'stage: screen',
+    kind: 'stage',
+    stageKey: 'screen',
+    title: 'Screen questions',
+    body: 'Gate whether input is judgeable and scan untrusted content for injection attempts.',
+    bullets: [
+      'screen.judgeable (noul) — is there a reply to evaluate?',
+      'screen.injection (noul) — prompt/context trying to override the judge?',
+    ],
+    codeRef: 'shared/rubrics/assistant-reply.yaml',
+  },
+  {
+    id: 'profile',
+    label: 'Profile',
+    subtitle: 'stage: profile',
+    kind: 'stage',
+    stageKey: 'profile',
+    title: 'Profile questions',
+    body: 'Classify the primary intent of the artifact being judged.',
+    bullets: ['profile.intent (choice) — answer, refusal, clarification, mixed'],
+    codeRef: 'shared/rubrics/assistant-reply.yaml',
+  },
+  {
+    id: 'locate',
+    label: 'Locate',
+    subtitle: 'stage: locate',
+    kind: 'stage',
+    title: 'Locate questions',
+    body: 'Pinpoint risk signals in the content — hallucination risk and harmful instructions.',
+    bullets: [
+      'locate.hallucination_risk (noul) — unsupported factual claims',
+      'locate.harmful (noul) — content unsafe to follow literally',
+    ],
+    codeRef: 'shared/rubrics/assistant-reply.yaml',
+  },
+  {
+    id: 'score',
+    label: 'Score',
+    subtitle: 'stage: score',
+    kind: 'stage',
+    stageKey: 'score',
+    title: 'Score questions',
+    body: 'Rate quality on ordered criteria lists. Scores map to 0.0–(n−1) for n levels.',
+    bullets: [
+      'score.helpfulness (score) — 5-level helpfulness scale',
+      'score.coherence (score) — 5-level structure scale',
+    ],
+    codeRef: 'shared/rubrics/assistant-reply.yaml',
+  },
+  {
+    id: 'route-q',
+    label: 'Route Q',
+    subtitle: 'stage: route',
+    kind: 'stage',
+    stageKey: 'route',
+    title: 'Route-stage question',
+    body: 'A noul question asking whether a human should review before the reply is shown or acted on.',
+    bullets: ['route.escalate (noul) — model flags borderline / consequential cases'],
+    codeRef: 'shared/rubrics/assistant-reply.yaml',
+  },
+  {
+    id: 'answers',
+    label: 'Answers',
+    subtitle: 'noul · choice · score',
+    kind: 'stage',
+    title: 'Normalized answers',
+    body: 'TypeSafe returns typed answers normalized to plain JSON-safe dicts.',
+    bullets: [
+      'noul: probability 0–1 (0.5 = uncertainty, not a semantic midpoint)',
+      'choice: label + confidence',
+      'score: numeric score + confidence + legend',
+      'Noul has no confidence field; distance from 0.5 stands in',
+    ],
+    codeRef: 'typesafe_client.py → normalize_answers()',
+  },
+  {
+    id: 'route',
+    label: 'Route',
+    subtitle: 'declarative YAML rules',
+    kind: 'stage',
+    title: 'Declarative routing',
+    body: 'Rules from rubric YAML are evaluated in order. The first rule whose all conditions hold wins.',
+    bullets: [
+      'Conditions are ANDed; short-circuit on first false',
+      'field: noul | score | confidence | choice; op: < <= > >= == !=',
+      'Missing answer → escalate (never fall through to a laxer rule)',
+      'No rule matched → review',
+    ],
+    codeRef: 'routing.py → route_verdict()',
+  },
+  {
+    id: 'confidence-floor',
+    label: 'Confidence floor',
+    subtitle: 'confidence_floors[stakes]',
+    kind: 'stage',
+    title: 'Confidence floor gate',
+    body: 'Automatic pass/fail below the rubric stakes floor is downgraded to review.',
+    bullets: [
+      'confidence = min over deciding_answers the matched rule read',
+      'Gated verdicts: pass, fail only',
+      'review / escalate / skip are not gated',
+      'Example floors: read_only 0.5, write 0.7, destructive 0.85',
+    ],
+    codeRef: 'routing.py → GATED_VERDICTS',
+  },
+  {
+    id: 'verdict-pass',
+    label: 'pass',
+    subtitle: 'exit 0',
+    kind: 'verdict',
+    title: 'Verdict: pass',
+    body: 'The matched rule returned pass and confidence met the floor.',
+    bullets: ['Automatic approval signal for the harness'],
+    codeRef: 'models.py → VERDICTS',
+  },
+  {
+    id: 'verdict-fail',
+    label: 'fail',
+    subtitle: 'exit 1',
+    kind: 'verdict',
+    title: 'Verdict: fail',
+    body: 'The matched rule returned fail and confidence met the floor.',
+    bullets: ['Automatic rejection signal for the harness'],
+    codeRef: 'models.py → VERDICTS',
+  },
+  {
+    id: 'verdict-review',
+    label: 'review',
+    subtitle: 'exit 2',
+    kind: 'verdict',
+    title: 'Verdict: review',
+    body: 'Human review required — either the rule matched review, no rule matched, or pass/fail was downgraded.',
+    bullets: ['Low-confidence automatic verdicts land here'],
+    codeRef: 'models.py → VERDICTS',
+  },
+  {
+    id: 'verdict-escalate',
+    label: 'escalate',
+    subtitle: 'exit 3',
+    kind: 'verdict',
+    title: 'Verdict: escalate',
+    body: 'Safety or unevaluable conditions require human escalation.',
+    bullets: [
+      'Injection, harm, or model-flagged review',
+      'Missing answer on a rule → escalate (not skip)',
+    ],
+    codeRef: 'routing.py → UnevaluableRule',
+  },
+  {
+    id: 'verdict-skip',
+    label: 'skip',
+    subtitle: 'exit 4',
+    kind: 'verdict',
+    title: 'Verdict: skip',
+    body: 'Input is not judgeable — e.g. screen.judgeable below threshold.',
+    bullets: ['Not an error; judgment intentionally skipped'],
+    codeRef: 'shared/rubrics/assistant-reply.yaml routing',
+  },
+  {
+    id: 'result',
+    label: 'JudgmentResult',
+    subtitle: 'JSON stdout',
+    kind: 'stage',
+    title: 'JudgmentResult',
+    body: 'Structured JSON on stdout with verdict, confidence, stage, deciding_answers, usage, and full answers.',
+    bullets: [
+      'Exit codes 0–4 are verdicts; 10/11 mean operational failure',
+      'Both Python and Rust runtimes must produce identical results',
+    ],
+    codeRef: 'funnel.py → JudgmentResult',
+  },
+];
+
+/** Static edge list — layout engine positions nodes. */
+export const FUNNEL_EDGES: Array<{ source: string; target: string; label?: string }> = [
+  { source: 'input', target: 'state-filter' },
+  { source: 'state-filter', target: 'jev-call' },
+  { source: 'jev-call', target: 'screen' },
+  { source: 'jev-call', target: 'profile' },
+  { source: 'jev-call', target: 'locate' },
+  { source: 'jev-call', target: 'score' },
+  { source: 'jev-call', target: 'route-q' },
+  { source: 'screen', target: 'answers' },
+  { source: 'profile', target: 'answers' },
+  { source: 'locate', target: 'answers' },
+  { source: 'score', target: 'answers' },
+  { source: 'route-q', target: 'answers' },
+  { source: 'answers', target: 'route' },
+  { source: 'route', target: 'confidence-floor' },
+  { source: 'confidence-floor', target: 'verdict-pass', label: 'pass' },
+  { source: 'confidence-floor', target: 'verdict-fail', label: 'fail' },
+  { source: 'confidence-floor', target: 'verdict-review', label: 'review' },
+  { source: 'confidence-floor', target: 'verdict-escalate', label: 'escalate' },
+  { source: 'confidence-floor', target: 'verdict-skip', label: 'skip' },
+  { source: 'route', target: 'verdict-escalate', label: 'missing answer' },
+  { source: 'route', target: 'verdict-review', label: 'no match' },
+  { source: 'verdict-pass', target: 'result' },
+  { source: 'verdict-fail', target: 'result' },
+  { source: 'verdict-review', target: 'result' },
+  { source: 'verdict-escalate', target: 'result' },
+  { source: 'verdict-skip', target: 'result' },
+];
+
+export const NODE_BY_ID = Object.fromEntries(FUNNEL_NODES.map((n) => [n.id, n])) as Record<
+  string,
+  FunnelNodeMeta
+>;
