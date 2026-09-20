@@ -605,19 +605,39 @@ body {
 }
 
 .node-step-popup {
-  background: linear-gradient(180deg, #1e2a42 0%, #151f33 100%);
-  border: 1px solid #6d8cff;
-  color: #f0f4ff;
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: clamp(0.88rem, 2.6vw, 1rem);
-  font-weight: 550;
-  line-height: 1.35;
-  max-width: min(320px, 88vw);
-  text-align: center;
+  position: relative;
+  background: rgba(10, 14, 22, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: none;
+  color: #b8c8dc;
+  padding: 9px 16px;
+  border-radius: 999px;
+  font-size: clamp(0.82rem, 2.4vw, 0.94rem);
+  font-weight: 420;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+  max-width: min(260px, 76vw);
+  text-align: left;
   white-space: normal;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(109, 140, 255, 0.25);
+  box-shadow:
+    0 6px 22px rgba(0, 0, 0, 0.38),
+    0 0 28px rgba(155, 123, 255, 0.14);
   pointer-events: none;
+}
+
+.node-step-popup--right::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 7px solid rgba(10, 14, 22, 0.82);
+  filter: drop-shadow(-2px 0 4px rgba(0, 0, 0, 0.2));
 }
 
 .funnel-edge.is-active {

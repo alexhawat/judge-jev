@@ -37,19 +37,18 @@ function FunnelNodeComponent({ data, selected }: NodeProps & { data: FunnelNodeD
 
   return (
     <>
-      <NodeToolbar
-        isVisible={showStepPopup || showHoverTip}
-        position={Position.Top}
-        offset={showStepPopup ? 14 : 8}
-      >
-        {showStepPopup ? (
-          <div className="node-step-popup" role="status" aria-live="polite">
+      {showStepPopup ? (
+        <NodeToolbar isVisible position={Position.Right} offset={16} align="center">
+          <div className="node-step-popup node-step-popup--right" role="status" aria-live="polite">
             {stepPopup}
           </div>
-        ) : (
+        </NodeToolbar>
+      ) : null}
+      {showHoverTip ? (
+        <NodeToolbar isVisible position={Position.Top} offset={8}>
           <div className="node-tooltip">{tooltip}</div>
-        )}
-      </NodeToolbar>
+        </NodeToolbar>
+      ) : null}
       <div className={classes} title={tooltip}>
         <Handle type="target" position={Position.Top} className="funnel-handle" />
         <div className="funnel-node-label">{meta.label}</div>
