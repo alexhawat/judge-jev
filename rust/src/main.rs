@@ -1,5 +1,5 @@
 use anyhow::Result;
-use judge_jev::funnel::{replay_judgment, run_judgment};
+use judge_jev::funnel::{read_input_text, replay_judgment, run_judgment};
 use judge_jev::models::{JudgmentResult, SavedJudgment};
 use judge_jev::rubric::{list_rubric_ids, show_rubric};
 use judge_jev::{exit_for_verdict, setup, EXIT_ERROR, EXIT_OK, EXIT_USAGE};
@@ -75,10 +75,9 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
                 Ok(input) => input,
                 Err(msg) => return Ok(usage_error(&msg)),
             };
-            let text = std::fs::read_to_string(&input)
-                .map_err(|e| anyhow::anyhow!("cannot read {input}: {e}"))?;
+            let text = read_input_text(&PathBuf::from(&input))?;
             let saved: SavedJudgment = serde_json::from_str(&text)
-                .map_err(|e| anyhow::anyhow!("{input} is not a saved judgment: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("input {input} is not a saved judgment: {e}"))?;
             let result = replay_judgment(&saved)?;
             print_result(&result)?;
             Ok(exit_for_verdict(&result.verdict))

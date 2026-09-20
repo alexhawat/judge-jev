@@ -546,3 +546,82 @@ fn a_typo_never_silently_drops_mock() {
     ]);
     assert_eq!(code, EXIT_USAGE);
 }
+
+// --- stdin ---------------------------------------------------------------------
+
+/// Run the real binary with `text` on stdin, returning (exit code, stdout, stderr).
+fn cli_stdin(args: &[&str], text: &str) -> (i32, String, String) {
+    use std::io::Write;
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_judge-jev"))
+        .args(args)
+        .env("JUDGE_JEV_ROOT", repo())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn judge-jev");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(text.as_bytes())
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait");
+    (
+        out.status.code().expect("exit code"),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+#[test]
+fn input_dash_reads_stdin_for_run_and_replay() {
+    // `run --input - | replay --input -` is the composition this exists for.
+    let fixture =
+        std::fs::read_to_string(fixtures().join("assistant-reply-pass.json")).expect("fixture");
+    let (code, judged, stderr) = cli_stdin(
+        &[
+            "run",
+            "--rubric",
+            "assistant-reply",
+            "--input",
+            "-",
+            "--mock",
+        ],
+        &fixture,
+    );
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let (code, replayed, stderr) = cli_stdin(&["replay", "--input", "-"], &judged);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let judged: Value = serde_json::from_str(&judged).expect("judged json");
+    let replayed: Value = serde_json::from_str(&replayed).expect("replayed json");
+    assert_eq!(judged["verdict"], replayed["verdict"]);
+    assert_eq!(judged["answers"], replayed["answers"]);
+}
+
+#[test]
+fn dash_is_stdin_not_a_file_under_the_repo_root() {
+    assert_eq!(
+        judge_jev::funnel::resolve_input_path(std::path::Path::new("-")),
+        std::path::PathBuf::from("-")
+    );
+}
+
+#[test]
+fn missing_input_message_is_the_shared_wording() {
+    // Worded identically in the Python runtime; check-parity.sh compares them.
+    let (code, stderr) = cli(&[
+        "run",
+        "--rubric",
+        "assistant-reply",
+        "--input",
+        "nope.json",
+        "--mock",
+    ]);
+    assert_eq!(code, 10);
+    assert!(
+        stderr.contains("cannot read input nope.json: No such file or directory (os error 2)"),
+        "stderr: {stderr}"
+    );
+}

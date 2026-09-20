@@ -3,14 +3,26 @@ use crate::paths::repo_root;
 use crate::routing::route_verdict;
 use crate::rubric::load_rubric;
 use crate::typesafe::{build_questions, filter_state, mock, pinned_answers, LiveClient};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+/// `--input -` reads stdin, so `judge-jev run ... | judge-jev replay --input -`
+/// composes. It is also the only way to judge something that was never a file.
+pub const STDIN_PATH: &str = "-";
+
+/// Find the file a caller named, relative to the cwd or to the repo root.
+///
+/// `-` is stdin, not a path: without this guard the repo-relative fallback goes
+/// looking for a file literally named `-` under the repo root.
 pub fn resolve_input_path(path: &Path) -> PathBuf {
+    if path == Path::new(STDIN_PATH) {
+        return path.to_path_buf();
+    }
     if path.is_file() {
         return path.to_path_buf();
     }
@@ -21,16 +33,30 @@ pub fn resolve_input_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+pub fn read_input_text(path: &Path) -> Result<String> {
+    if path == Path::new(STDIN_PATH) {
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .map_err(|e| anyhow!("cannot read input {}: {e}", path.display()))?;
+        return Ok(text);
+    }
+    // The message names the path the caller typed, not the resolved one, and is
+    // worded exactly as the Python runtime words it.
+    fs::read_to_string(resolve_input_path(path))
+        .map_err(|e| anyhow!("cannot read input {}: {e}", path.display()))
+}
+
 pub fn load_input(path: &Path) -> Result<Value> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("read input {}", path.display()))?;
-    let value: Value = serde_json::from_str(&text)?;
+    let text = read_input_text(path)?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|e| anyhow!("input {} is not valid JSON: {e}", path.display()))?;
     Ok(value)
 }
 
 pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Result<JudgmentResult> {
     let rubric = load_rubric(rubric_id)?;
-    let raw = load_input(&resolve_input_path(input_path))?;
+    let raw = load_input(input_path)?;
     let state = filter_state(&raw, &rubric.state_filter);
 
     let questions = build_questions(&rubric);

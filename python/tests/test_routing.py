@@ -388,3 +388,35 @@ def test_usage_errors_exit_11_and_say_why(argv, message, capsys):
 def test_help_still_exits_zero(capsys):
     assert main(["--help"]) == 0
     assert "judge-jev" in capsys.readouterr().out
+
+
+# --- stdin ---------------------------------------------------------------------
+
+
+def test_input_dash_reads_stdin_for_run_and_replay(monkeypatch, capsys):
+    """`run --input - | replay --input -` is the composition this exists for."""
+    import io
+    import sys as _sys
+
+    monkeypatch.setattr(_sys, "stdin", io.StringIO((FIXTURES / "assistant-reply-pass.json").read_text()))
+    assert main(["run", "--rubric", "assistant-reply", "--input", "-", "--mock"]) == 0
+    judged = capsys.readouterr().out
+
+    monkeypatch.setattr(_sys, "stdin", io.StringIO(judged))
+    assert main(["replay", "--input", "-"]) == 0
+    replayed = json.loads(capsys.readouterr().out)
+    assert replayed["verdict"] == json.loads(judged)["verdict"]
+    assert replayed["answers"] == json.loads(judged)["answers"]
+
+
+def test_dash_is_stdin_not_a_file_under_the_repo_root():
+    from judge_jev.funnel import resolve_input_path
+
+    assert str(resolve_input_path(Path("-"))) == "-"
+
+
+def test_missing_input_message_is_the_shared_wording(capsys):
+    """Both runtimes emit this string verbatim; check-parity.sh compares them."""
+    assert main(["run", "--rubric", "assistant-reply", "--input", "nope.json", "--mock"]) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "cannot read input nope.json: No such file or directory (os error 2)" in err

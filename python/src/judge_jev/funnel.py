@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,19 @@ from judge_jev.typesafe_client import (
 )
 
 
+# `--input -` reads stdin, so `judge-jev run ... | judge-jev replay --input -`
+# composes. It is also the only way to judge something that was never a file.
+STDIN_PATH = "-"
+
+
 def resolve_input_path(path: Path) -> Path:
+    """Find the file a caller named, relative to the cwd or to the repo root.
+
+    `-` is stdin, not a path: without this guard the repo-relative fallback goes
+    looking for a file literally named `-` under the repo root.
+    """
+    if str(path) == STDIN_PATH:
+        return path
     if path.is_file():
         return path
     candidate = repo_root() / path
@@ -30,17 +43,27 @@ def resolve_input_path(path: Path) -> Path:
     return path
 
 
-def load_input(path: Path) -> dict[str, Any]:
+def read_input_text(path: Path) -> str:
+    if str(path) == STDIN_PATH:
+        return sys.stdin.read()
     try:
-        text = path.read_text(encoding="utf-8")
+        return resolve_input_path(path).read_text(encoding="utf-8")
     except OSError as err:
-        raise JudgeJevError(f"Cannot read input {path}: {err.strerror or err}") from err
+        # Worded, down to the "(os error N)" tail, exactly as the Rust runtime
+        # words it: the message a caller greps for must not depend on which
+        # runtime .judge-jev/runtime happens to name.
+        detail = f"{err.strerror} (os error {err.errno})" if err.errno else str(err)
+        raise JudgeJevError(f"cannot read input {path}: {detail}") from err
+
+
+def load_input(path: Path) -> dict[str, Any]:
+    text = read_input_text(path)
     try:
         data = json.loads(text)
     except json.JSONDecodeError as err:
-        raise JudgeJevError(f"Input {path} is not valid JSON: {err}") from err
+        raise JudgeJevError(f"input {path} is not valid JSON: {err}") from err
     if not isinstance(data, dict):
-        raise JudgeJevError(f"Input {path} must be a JSON object, got {type(data).__name__}")
+        raise JudgeJevError(f"input {path} must be a JSON object, got {type(data).__name__}")
     return data
 
 
@@ -51,7 +74,7 @@ def run_judgment(
     mock: bool = False,
 ) -> JudgmentResult:
     rubric = load_rubric(rubric_id)
-    raw = load_input(resolve_input_path(input_path))
+    raw = load_input(input_path)
     state = filter_state(raw, rubric.state_filter)
 
     pinned = raw.get(MOCK_ANSWERS_KEY) if mock else None

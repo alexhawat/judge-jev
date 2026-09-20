@@ -10,7 +10,7 @@ from typing import NoReturn
 
 from loguru import logger
 
-from judge_jev.funnel import replay_judgment, run_judgment
+from judge_jev.funnel import read_input_text, replay_judgment, run_judgment
 from judge_jev.models import RubricError
 from judge_jev.rubric import list_rubric_ids, show_rubric
 from judge_jev.setup_cmd import run_setup
@@ -53,12 +53,11 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_replay(args: argparse.Namespace) -> int:
     path = Path(args.input)
+    text = read_input_text(path)
     try:
-        saved = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as err:
-        raise JudgeJevError(f"Cannot read {path}: {err.strerror or err}") from err
+        saved = json.loads(text)
     except json.JSONDecodeError as err:
-        raise JudgeJevError(f"{path} is not valid JSON: {err}") from err
+        raise JudgeJevError(f"input {path} is not valid JSON: {err}") from err
     result = replay_judgment(saved)
     print(json.dumps(result.to_dict(), indent=2))
     return _exit_for_verdict(result.verdict)
