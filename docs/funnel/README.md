@@ -28,4 +28,4 @@ Push to the `pages/funnel-preview` branch (or run the **Deploy funnel preview to
 
 Source lives in `web/funnel/`. The workflow builds with Vite and publishes `web/funnel/dist` to GitHub Pages.
 
-If the site 404s after the first deploy, enable **Settings → Pages → Build and deployment → Source: GitHub Actions** once.
+If the site 404s after the first deploy, enable **Settings → Pages → Build and deployment → Source: Deploy from branch → `gh-pages` / `(root)`** once. The workflow pushes built assets to `gh-pages:funnel/`.
