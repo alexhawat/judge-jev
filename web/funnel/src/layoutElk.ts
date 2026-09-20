@@ -23,8 +23,8 @@ export async function layoutFunnel(): Promise<{ nodes: Node<FunnelNodeData>[]; e
       width: meta.kind === 'jev' ? 200 : NODE_WIDTH,
       height: meta.subtitle ? NODE_HEIGHT + 12 : NODE_HEIGHT,
     })),
-    edges: FUNNEL_EDGES.map((e, i) => ({
-      id: `e-${i}`,
+    edges: FUNNEL_EDGES.map((e) => ({
+      id: e.id,
       sources: [e.source],
       targets: [e.target],
     })),
@@ -42,17 +42,17 @@ export async function layoutFunnel(): Promise<{ nodes: Node<FunnelNodeData>[]; e
       id: meta.id,
       type: 'funnel',
       position: pos,
-      data: { meta },
+      data: { meta, visualState: 'idle' },
     };
   });
 
-  const edges: Edge[] = FUNNEL_EDGES.map((e, i) => ({
-    id: `e-${i}`,
+  const edges: Edge[] = FUNNEL_EDGES.map((e) => ({
+    id: e.id,
     source: e.source,
     target: e.target,
+    type: 'funnel',
     label: e.label,
-    animated: e.source === 'jev-call' || e.source === 'route',
-    className: e.label ? 'edge-labeled' : undefined,
+    data: { dimmed: false, active: false, hideLabel: false },
   }));
 
   return { nodes, edges };

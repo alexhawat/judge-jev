@@ -6,6 +6,8 @@ Live preview (GitHub Pages, `pages/funnel-preview` branch):
 
 Interactive React Flow diagram of the core judgment pipeline: input → state filter → one batched TypeSafe `system_one` call (screen / profile / locate / score / route questions) → answers → declarative YAML routing → confidence floor → verdict.
 
+**Interactions:** hover path highlight + dimming, rubric edge labels, fixture **Play** animation (pass / fail / escalate / injection / confidence floor), deep link `?node=<id>`, **Esc** to reset.
+
 ## Local development
 
 ```bash
