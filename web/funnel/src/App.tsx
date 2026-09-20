@@ -24,6 +24,7 @@ import { useMobileLayout } from './hooks/useMediaQuery';
 import { isPlayActive, isPlayInProgress, type PlayPhase } from './playPhase';
 import { computeHighlight, computePlayHighlight } from './pathUtils';
 import { DEFAULT_SCENARIO_ID, SCENARIO_BY_ID, type PlayScenario } from './scenarios';
+import { plainEnglishForStep } from './stepPlainEnglish';
 import { layoutFunnel } from './layoutElk';
 
 const nodeTypes = { funnel: FunnelNode };
@@ -53,6 +54,7 @@ function FunnelDiagram({
   hoverId,
   selectedId,
   phase,
+  stepPopupText,
   playHighlight,
   hideLabels,
   mobile,
@@ -71,6 +73,7 @@ function FunnelDiagram({
   hoverId: string | null;
   selectedId: string | null;
   phase: PlayPhase;
+  stepPopupText: string | null;
   playHighlight: ReturnType<typeof computePlayHighlight> | null;
   hideLabels: boolean;
   mobile: boolean;
@@ -84,7 +87,7 @@ function FunnelDiagram({
   onZoom: (zoom: number) => void;
 }) {
   const playComplete = phase === 'complete';
-  const playing = phase === 'playing';
+  const stepTourActive = phase === 'playing' || phase === 'stepping';
   const playMode = Boolean(playHighlight);
   const highlight = playHighlight ?? (focusId ? computeHighlight(focusId, FUNNEL_EDGES) : null);
   const hasFocus = Boolean(highlight && (focusId || playHighlight));
@@ -92,24 +95,26 @@ function FunnelDiagram({
   const nodes = useMemo(() => {
     return baseNodes.map((n) => {
       let visualState: NodeVisualState = 'idle';
-      if (focusId === n.id && playing) visualState = 'playing';
+      if (focusId === n.id && stepTourActive) visualState = 'playing';
       else if (focusId === n.id && playComplete) visualState = 'selected';
       else if (hoverId === n.id && hoverId !== selectedId) visualState = 'hover';
       else if (selectedId === n.id || focusId === n.id) visualState = 'selected';
       else if (hasFocus && highlight && !highlight.nodes.has(n.id)) visualState = 'dimmed';
       const selected = selectionLocked ? n.id === focusId : selectedId === n.id;
-      return { ...n, selected, data: { ...n.data, visualState } };
+      const stepPopup = focusId === n.id ? stepPopupText : null;
+      return { ...n, selected, data: { ...n.data, visualState, stepPopup } };
     });
   }, [
     baseNodes,
     focusId,
     hoverId,
     selectedId,
-    playing,
+    stepTourActive,
     playComplete,
     hasFocus,
     highlight,
     selectionLocked,
+    stepPopupText,
   ]);
 
   const edges = useMemo(() => {
@@ -139,14 +144,14 @@ function FunnelDiagram({
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onNodeMouseEnter={(_, node) => {
-        if (!mobile && !playComplete) onHover(node.id);
+        if (!mobile && !playComplete && phase === 'idle') onHover(node.id);
       }}
       onNodeMouseLeave={() => {
-        if (!mobile && !playComplete) onHover(null);
+        if (!mobile && !playComplete && phase === 'idle') onHover(null);
       }}
       onNodeClick={(_, node) => onNodeTap(node.id)}
       onPaneClick={() => {
-        if (!playComplete && !playing) {
+        if (phase === 'idle') {
           onHover(null);
           onClearSelection();
         }
@@ -196,6 +201,7 @@ function AppInner() {
   const playInProgress = isPlayInProgress(phase);
   const playActive = isPlayActive(phase);
   const playComplete = phase === 'complete';
+  const stepCount = scenario?.steps.length ?? 0;
 
   useEffect(() => {
     playGenRef.current = playGen;
@@ -262,9 +268,9 @@ function AppInner() {
   );
 
   const focusId = playActive
-    ? playInProgress
-      ? currentStep?.nodeId ?? null
-      : scenario?.verdictNodeId ?? null
+    ? playComplete
+      ? scenario?.verdictNodeId ?? null
+      : currentStep?.nodeId ?? null
     : hoverId ?? selectedId;
 
   const playHighlight = useMemo(() => {
@@ -282,20 +288,82 @@ function AppInner() {
   const focusMeta = focusId ? NODE_BY_ID[focusId] ?? null : null;
   const inspectNode = selectedId ? NODE_BY_ID[selectedId] ?? null : null;
 
+  const stepPopupText = useMemo(() => {
+    if (!playActive || !scenario) return null;
+    if (playComplete) {
+      const verdictStep = scenario.steps.find((s) => s.nodeId === scenario.verdictNodeId);
+      return verdictStep ? plainEnglishForStep(verdictStep) : null;
+    }
+    return currentStep ? plainEnglishForStep(currentStep) : null;
+  }, [playActive, scenario, playComplete, currentStep]);
+
+  const goToStep = useCallback(
+    (idx: number, nextPhase: PlayPhase) => {
+      const steps = scenario?.steps ?? [];
+      if (idx < 0 || idx >= steps.length) return;
+      clearPlayTimer();
+      bumpPlayGen();
+      setPhase(nextPhase);
+      setStepIndex(idx);
+      setSelectedId(steps[idx].nodeId);
+      setInspectOpen(false);
+      if (mobile) setSheetExpanded(true);
+    },
+    [scenario, clearPlayTimer, bumpPlayGen, mobile],
+  );
+
+  const finishTour = useCallback(() => {
+    clearPlayTimer();
+    bumpPlayGen();
+    setPhase('complete');
+    setInspectOpen(false);
+    if (scenario) setSelectedId(scenario.verdictNodeId);
+    if (mobile) setSheetExpanded(false);
+  }, [scenario, clearPlayTimer, bumpPlayGen, mobile]);
+
   const advanceStep = useCallback(() => {
     const gen = playGenRef.current;
     const idx = stepIndexRef.current;
     const steps = scenario?.steps ?? [];
     if (idx >= steps.length - 1) {
       if (gen !== playGenRef.current) return;
-      setPhase('complete');
-      setInspectOpen(false);
-      if (scenario) setSelectedId(scenario.verdictNodeId);
+      finishTour();
       return;
     }
     if (gen !== playGenRef.current) return;
     setStepIndex(idx + 1);
-  }, [scenario]);
+    setSelectedId(steps[idx + 1]?.nodeId ?? null);
+  }, [scenario, finishTour]);
+
+  const goNext = useCallback(() => {
+    if (phase === 'complete') return;
+    if (phase === 'idle') {
+      goToStep(0, 'stepping');
+      return;
+    }
+    const idx = stepIndexRef.current;
+    const steps = scenario?.steps ?? [];
+    if (idx >= steps.length - 1) {
+      finishTour();
+      return;
+    }
+    goToStep(idx + 1, 'stepping');
+  }, [phase, scenario, goToStep, finishTour]);
+
+  const goBack = useCallback(() => {
+    if (phase === 'idle') return;
+    const steps = scenario?.steps ?? [];
+    if (phase === 'complete') {
+      goToStep(Math.max(steps.length - 1, 0), 'stepping');
+      return;
+    }
+    const idx = stepIndexRef.current;
+    if (idx <= 0) return;
+    goToStep(idx - 1, 'stepping');
+  }, [phase, scenario, goToStep]);
+
+  const canBack = phase === 'complete' || (playActive && stepIndex > 0);
+  const canNext = phase !== 'complete';
 
   const startPlay = useCallback(() => {
     bumpPlayGen();
@@ -321,10 +389,10 @@ function AppInner() {
   }, [phase, stepIndex, currentStep, advanceStep, clearPlayTimer]);
 
   useEffect(() => {
-    if (playInProgress && currentStep) {
+    if ((playInProgress || phase === 'complete') && currentStep && phase !== 'complete') {
       setSelectedId(currentStep.nodeId);
     }
-  }, [stepIndex, playInProgress, currentStep]);
+  }, [stepIndex, playInProgress, phase, currentStep]);
 
   useEffect(() => {
     if (playInProgress && mobile) setSheetExpanded(true);
@@ -358,7 +426,7 @@ function AppInner() {
 
   const onNodeTap = useCallback(
     (id: string) => {
-      if (phase === 'playing') return;
+      if (phase === 'playing' || phase === 'stepping') return;
       if (phase === 'complete') {
         if (id !== scenario?.verdictNodeId) {
           setPhase('idle');
@@ -377,7 +445,7 @@ function AppInner() {
     [phase, scenario, mobile],
   );
 
-  const playFocusActive = playInProgress;
+  const playFocusActive = phase === 'playing' || phase === 'stepping' || phase === 'complete';
 
   return (
     <div className={`app-shell ${mobile ? 'app-shell--mobile' : ''}`}>
@@ -405,10 +473,17 @@ function AppInner() {
           if (phase === 'paused') setPhase('playing');
           else startPlay();
         }}
-        onPause={() => setPhase('paused')}
+        onPause={() => {
+          clearPlayTimer();
+          setPhase('paused');
+        }}
         onReset={resetPlay}
+        onBack={goBack}
+        onNext={goNext}
         stepIndex={displayStepIndex}
-        stepCount={scenario?.steps.length ?? 0}
+        stepCount={stepCount}
+        canBack={canBack}
+        canNext={canNext}
         mobile={mobile}
       />
 
@@ -441,6 +516,7 @@ function AppInner() {
                 hoverId={hoverId}
                 selectedId={selectedId}
                 phase={phase}
+                stepPopupText={stepPopupText}
                 playHighlight={playHighlight}
                 hideLabels={hideLabels}
                 mobile={mobile}
@@ -450,8 +526,8 @@ function AppInner() {
                 ready={ready}
                 onHover={setHoverId}
                 onNodeTap={onNodeTap}
-              onClearSelection={onClearSelection}
-              onZoom={setZoom}
+                onClearSelection={onClearSelection}
+                onZoom={setZoom}
               />
             ) : (
               <div className="flow-loading">Laying out funnel…</div>

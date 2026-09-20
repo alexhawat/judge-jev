@@ -7,6 +7,8 @@ export type NodeVisualState = 'idle' | 'hover' | 'selected' | 'playing' | 'dimme
 export type FunnelNodeData = {
   meta: FunnelNodeMeta;
   visualState?: NodeVisualState;
+  /** Plain-English popup during Play / manual stepping / complete. */
+  stepPopup?: string | null;
 };
 
 const kindClass: Record<FunnelNodeMeta['kind'], string> = {
@@ -16,7 +18,7 @@ const kindClass: Record<FunnelNodeMeta['kind'], string> = {
 };
 
 function FunnelNodeComponent({ data, selected }: NodeProps & { data: FunnelNodeData }) {
-  const { meta, visualState = 'idle' } = data;
+  const { meta, visualState = 'idle', stepPopup } = data;
   const classes = [
     'funnel-node',
     kindClass[meta.kind],
@@ -30,11 +32,23 @@ function FunnelNodeComponent({ data, selected }: NodeProps & { data: FunnelNodeD
     .join(' ');
 
   const tooltip = meta.subtitle ?? meta.label;
+  const showStepPopup = Boolean(stepPopup);
+  const showHoverTip = visualState === 'hover' && !showStepPopup;
 
   return (
     <>
-      <NodeToolbar isVisible={visualState === 'hover' || visualState === 'playing'} position={Position.Top}>
-        <div className="node-tooltip">{tooltip}</div>
+      <NodeToolbar
+        isVisible={showStepPopup || showHoverTip}
+        position={Position.Top}
+        offset={showStepPopup ? 14 : 8}
+      >
+        {showStepPopup ? (
+          <div className="node-step-popup" role="status" aria-live="polite">
+            {stepPopup}
+          </div>
+        ) : (
+          <div className="node-tooltip">{tooltip}</div>
+        )}
       </NodeToolbar>
       <div className={classes} title={tooltip}>
         <Handle type="target" position={Position.Top} className="funnel-handle" />

@@ -1,5 +1,5 @@
 import type { PlayPhase } from '../playPhase';
-import { isPlayInProgress } from '../playPhase';
+import { isPlayActive } from '../playPhase';
 import { PLAY_SCENARIOS } from '../scenarios';
 
 type Props = {
@@ -10,8 +10,12 @@ type Props = {
   onPlay: () => void;
   onPause: () => void;
   onReset: () => void;
+  onBack: () => void;
+  onNext: () => void;
   stepIndex: number;
   stepCount: number;
+  canBack: boolean;
+  canNext: boolean;
   mobile?: boolean;
 };
 
@@ -23,8 +27,12 @@ export default function Toolbar({
   onPlay,
   onPause,
   onReset,
+  onBack,
+  onNext,
   stepIndex,
   stepCount,
+  canBack,
+  canNext,
   mobile = false,
 }: Props) {
   const playing = phase === 'playing';
@@ -51,6 +59,19 @@ export default function Toolbar({
             ))}
           </select>
         </div>
+
+        <div className="toolbar-group toolbar-group--step">
+          <span className="toolbar-label">Steps</span>
+          <div className="toolbar-step-actions">
+            <button type="button" className="toolbar-btn toolbar-btn-step" onClick={onBack} disabled={!canBack}>
+              Back
+            </button>
+            <button type="button" className="toolbar-btn toolbar-btn-step" onClick={onNext} disabled={!canNext}>
+              Next
+            </button>
+          </div>
+        </div>
+
         <div className="toolbar-group toolbar-actions">
           {playing ? (
             <button type="button" className="toolbar-btn" onClick={onPause}>
@@ -66,7 +87,7 @@ export default function Toolbar({
           </button>
         </div>
       </div>
-      {isPlayInProgress(phase) && stepCount > 0 ? (
+      {isPlayActive(phase) && stepCount > 0 ? (
         <div className="toolbar-progress">
           Step {Math.min(stepIndex + 1, stepCount)} / {stepCount}
         </div>

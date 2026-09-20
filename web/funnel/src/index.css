@@ -144,6 +144,19 @@ body {
   gap: 10px;
 }
 
+.toolbar-group--step {
+  gap: 8px;
+}
+
+.toolbar-step-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.toolbar-btn-step {
+  min-width: 4.5rem;
+}
+
 .toolbar-btn {
   background: #151b28;
   border: 1px solid var(--border);
@@ -591,6 +604,22 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
+.node-step-popup {
+  background: linear-gradient(180deg, #1e2a42 0%, #151f33 100%);
+  border: 1px solid #6d8cff;
+  color: #f0f4ff;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: clamp(0.88rem, 2.6vw, 1rem);
+  font-weight: 550;
+  line-height: 1.35;
+  max-width: min(320px, 88vw);
+  text-align: center;
+  white-space: normal;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(109, 140, 255, 0.25);
+  pointer-events: none;
+}
+
 .funnel-edge.is-active {
   filter: drop-shadow(0 0 4px rgba(167, 139, 250, 0.8));
 }
@@ -668,6 +697,19 @@ body {
     padding: 10px 12px;
   }
 
+  .toolbar-group--step {
+    flex-direction: row;
+    align-items: center;
+    width: 100%;
+  }
+
+  .toolbar-step-actions {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
   .toolbar-actions {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
@@ -679,6 +721,11 @@ body {
     min-height: 44px;
     padding: 10px 12px;
     font-size: 1rem;
+  }
+
+  .toolbar-btn-step {
+    min-height: 44px;
+    width: 100%;
   }
 
   .toolbar-progress {

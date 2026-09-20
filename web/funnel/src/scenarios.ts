@@ -15,6 +15,8 @@ export interface PlayStep {
   dwellMs: number;
   /** Prominent panel copy for this step — makes scenarios visually distinct mid-play. */
   stepNote: string;
+  /** 8–12 word plain-English popup near the active node during Play/stepping. */
+  plainEnglish?: string;
   /** Mock answer keys to surface in the panel on this step. */
   showAnswers?: string[];
 }
@@ -52,20 +54,23 @@ const SETUP: PlayStep[] = [
     deciding: true,
     dwellMs: DWELL_SETUP,
     stepNote: 'Load JSON artifact under test (prompt, reply, optional context).',
+    plainEnglish: "Load the reply JSON we're going to judge.",
   },
   {
     nodeId: 'state-filter',
     deciding: true,
     dwellMs: DWELL_SETUP,
     stepNote: 'Keep only rubric state_filter keys; strip _mock_answers before TypeSafe.',
+    plainEnglish: 'Keep only the fields this rubric allows.',
   },
 ];
 
-const JEV_BATCHED = (extra: string): PlayStep => ({
+const JEV_BATCHED = (extra: string, plainEnglish?: string): PlayStep => ({
   nodeId: 'jev-call',
   deciding: true,
   dwellMs: DWELL_BATCHED,
   stepNote: `One batched system_one (jev-1.13.0). ${extra}`,
+  plainEnglish: plainEnglish ?? 'Ask TypeSafe all rubric questions in one call.',
 });
 
 const ANSWERS: PlayStep = {
@@ -73,6 +78,7 @@ const ANSWERS: PlayStep = {
   deciding: true,
   dwellMs: DWELL_ANSWERS,
   stepNote: 'Normalize noul / choice / score answers from the batched response.',
+  plainEnglish: 'Collect normalized answers from the model response.',
 };
 
 const ROUTE: PlayStep = {
@@ -80,9 +86,10 @@ const ROUTE: PlayStep = {
   deciding: true,
   dwellMs: DWELL_ROUTE,
   stepNote: 'Evaluate YAML rules in order; first matching all conditions wins.',
+  plainEnglish: 'Apply the first matching rule to pick a verdict.',
 };
 
-function tail(verdictNodeId: string, reason: string, viaFloor: boolean): PlayStep[] {
+function tail(verdictNodeId: string, reason: string, viaFloor: boolean, verdictPlain: string): PlayStep[] {
   const out: PlayStep[] = [];
   if (viaFloor) {
     out.push({
@@ -93,6 +100,7 @@ function tail(verdictNodeId: string, reason: string, viaFloor: boolean): PlaySte
         verdictNodeId === 'verdict-review'
           ? 'pass rule matched but confidence min(deciding) < read_only floor 0.50 → review.'
           : 'confidence min(deciding) meets read_only floor 0.50 — automatic verdict stands.',
+      plainEnglish: 'Downgrade weak automatic pass/fail to review.',
     });
   }
   out.push({
@@ -100,12 +108,14 @@ function tail(verdictNodeId: string, reason: string, viaFloor: boolean): PlaySte
     deciding: true,
     dwellMs: DWELL_VERDICT,
     stepNote: reason,
+    plainEnglish: verdictPlain,
   });
   out.push({
     nodeId: 'result',
     deciding: true,
     dwellMs: DWELL_RESULT,
     stepNote: 'Emit JudgmentResult JSON on stdout with verdict, confidence, deciding_answers.',
+    plainEnglish: 'Output the final JudgmentResult JSON verdict.',
   });
   return out;
 }
@@ -144,6 +154,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         deciding: true,
         dwellMs: DWELL_DECIDING,
         stepNote: 'score.helpfulness 3.2 ≥ 2.0 · score.coherence 3.5 ≥ 2.0 — pass rule matches.',
+        plainEnglish: 'Scores are high enough to pass this reply.',
         showAnswers: ['score.helpfulness', 'score.coherence'],
       },
       ANSWERS,
@@ -151,7 +162,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         ...ROUTE,
         stepNote: 'pass rule matches first: helpfulness ≥ 2 AND coherence ≥ 2.',
       },
-      ...tail('verdict-pass', 'Meets helpfulness and coherence thresholds.', true),
+      ...tail('verdict-pass', 'Meets helpfulness and coherence thresholds.', true, 'Final decision: pass this reply.'),
     ],
   },
   {
@@ -188,6 +199,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         deciding: true,
         dwellMs: DWELL_DECIDING,
         stepNote: 'profile.intent == refusal (confidence 0.88).',
+        plainEnglish: 'This reply is a bare refusal, not a real answer.',
         showAnswers: ['profile.intent'],
       },
       {
@@ -195,6 +207,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         deciding: true,
         dwellMs: DWELL_DECIDING,
         stepNote: 'score.helpfulness 0.4 < 1.5 — paired with refusal → fail rule.',
+        plainEnglish: 'Helpfulness is too low to pass this reply.',
         showAnswers: ['score.helpfulness'],
       },
       ANSWERS,
@@ -202,7 +215,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         ...ROUTE,
         stepNote: 'fail rule: refusal AND helpfulness < 1.5.',
       },
-      ...tail('verdict-fail', 'Unhelpful refusal without adequate explanation.', true),
+      ...tail('verdict-fail', 'Unhelpful refusal without adequate explanation.', true, 'Final decision: fail this reply.'),
     ],
   },
   {
@@ -236,6 +249,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         deciding: true,
         dwellMs: DWELL_DECIDING,
         stepNote: 'route.escalate noul 0.85 ≥ 0.7 — human review before acting on reply.',
+        plainEnglish: 'The model says a human should review this reply.',
         showAnswers: ['route.escalate'],
       },
       ANSWERS,
@@ -243,7 +257,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         ...ROUTE,
         stepNote: 'escalate rule matches: route.escalate ≥ 0.7 (before pass/fail rules).',
       },
-      ...tail('verdict-escalate', 'Model flagged this reply for human review.', false),
+      ...tail('verdict-escalate', 'Model flagged this reply for human review.', false, 'Final decision: escalate for human review.'),
     ],
   },
   {
@@ -279,6 +293,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         deciding: true,
         dwellMs: DWELL_DECIDING_KEY,
         stepNote: 'screen.injection noul 0.82 ≥ 0.7 — injection rule fires before profile/locate/score matter.',
+        plainEnglish: 'Check if the prompt tries to hijack the judge.',
         showAnswers: ['screen.injection'],
       },
       ANSWERS,
@@ -286,7 +301,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         ...ROUTE,
         stepNote: 'Second rule in YAML: injection ≥ 0.7 → escalate (skips later rules).',
       },
-      ...tail('verdict-escalate', 'Possible prompt injection in untrusted state.', false),
+      ...tail('verdict-escalate', 'Possible prompt injection in untrusted state.', false, 'Final decision: escalate for human review.'),
     ],
   },
   {
@@ -323,6 +338,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         deciding: true,
         dwellMs: DWELL_DECIDING,
         stepNote: 'helpfulness 3.0 ≥ 2 · coherence 3.0 ≥ 2 — pass rule matches on scores.',
+        plainEnglish: 'Scores pass, but confidence on them is shaky.',
         showAnswers: ['score.helpfulness', 'score.coherence'],
       },
       ANSWERS,
@@ -334,6 +350,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
         'verdict-review',
         "Downgraded from 'pass': confidence 0.40 is below the read_only floor of 0.50.",
         true,
+        'Final decision: send to human review.',
       ),
     ],
   },
