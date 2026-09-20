@@ -32,7 +32,7 @@ jobs:
             ${{ github.event_name == 'pull_request'
                 && 'Review this pull request.'
                 || github.event.inputs.prompt }}
-          model: anthropic/claude-sonnet
+          model: openai/gpt-terra
           status_checks: enabled
         env:
           # The pin the job actually runs (manifest commit C). The container can
@@ -41,13 +41,17 @@ jobs:
           # consumer install records an empty pin and cannot report a pin/image
           # mismatch (#641). Keep it equal to the `uses:` SHA above.
           MERGECRAFT_ACTION_SHA: v0.1.0a1
-          # `mergecraft provider auth anthropic --scope github` stores the INDEXED
-          # secret (LLM_PROVIDER_<envIndex>_…, envIndex 1 for anthropic in
-          # .mergecraft/config.yaml). The flat spelling is what a hand-set secret
-          # uses. Both are accepted credential env names, and an unset secret
-          # renders empty and is skipped, so passing both means either path works.
-          LLM_PROVIDER_1_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.LLM_PROVIDER_1_CLAUDE_CODE_OAUTH_TOKEN }}
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
-          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # ChatGPT through the Codex harness, the same rung mergeCraft's own
+          # repo runs (openai/gpt-terra, CODEX_AUTH_JSON + OPENAI_API_KEY).
+          #
+          # Four spellings, all of them alternatives rather than requirements —
+          # an unset secret renders as an empty string and the resolver skips it.
+          # `mergecraft provider auth openai --scope github` stores the INDEXED
+          # name (openai is envIndex 8 in .mergecraft/config.yaml); the flat
+          # names are what a hand-set secret or an API key uses. Wiring all four
+          # means the subscription path and the API-key path both work without
+          # editing this file again.
+          LLM_PROVIDER_8_CODEX_AUTH_JSON: ${{ secrets.LLM_PROVIDER_8_CODEX_AUTH_JSON }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          LLM_PROVIDER_8_API_KEY: ${{ secrets.LLM_PROVIDER_8_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -1,5 +1,5 @@
 models:
-- anthropic/claude-sonnet
+- openai/gpt-terra
 push: restricted
 shell: restricted
 signedCommits: false
@@ -15,7 +15,6 @@ trust:
   # Residual risks: a fork PR checked out locally, or adding a collaborator.
   agentSandbox: 'dispatch'
   selfReview: 'off'
-
 providers:
 - label: anthropic
   harness: claude
