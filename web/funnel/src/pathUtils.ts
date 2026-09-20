@@ -108,7 +108,7 @@ export function computePlayHighlight(
   return { nodes, edgeIds, path };
 }
 
-/** Hover/inspect: ancestor path from Input plus neighbors. */
+/** Hover/inspect: ancestor path from Input only — no fan-out into sibling verdicts/branches. */
 export function computeHighlight(
   focusId: string | null,
   edgeList: EdgeDef[] = FUNNEL_EDGES,
@@ -118,20 +118,16 @@ export function computeHighlight(
   }
 
   let path = shortestPath(INPUT_ID, focusId, edgeList);
-  if (focusId.startsWith('verdict-') && !path.includes('result')) {
+  if (focusId.startsWith('verdict-')) {
     const toResult = shortestPath(focusId, 'result', edgeList);
-    if (toResult.length > 1) path = [...path, ...toResult.slice(1)];
-  }
-
-  const nodes = new Set(path);
-  for (const n of neighborsOf(focusId, edgeList)) nodes.add(n);
-
-  const ids = pathEdges(path, edgeList);
-  for (const e of edgeList) {
-    if (e.source === focusId || e.target === focusId) {
-      ids.add(e.id ?? edgeKey(e.source, e.target));
+    if (toResult.length > 1 && !path.includes('result')) {
+      path = [...path, ...toResult.slice(1)];
     }
   }
 
-  return { nodes, edgeIds: ids, path };
+  return {
+    nodes: new Set(path),
+    edgeIds: pathEdges(path, edgeList),
+    path,
+  };
 }

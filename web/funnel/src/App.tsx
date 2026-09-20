@@ -152,6 +152,7 @@ function AppInner() {
   const [scenarioId, setScenarioId] = useState(DEFAULT_SCENARIO_ID);
   const [playing, setPlaying] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [playComplete, setPlayComplete] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [sheetExpanded, setSheetExpanded] = useState(false);
 
@@ -187,31 +188,43 @@ function AppInner() {
     clearPlayTimer();
     setPlaying(false);
     setPaused(false);
+    setPlayComplete(false);
     setStepIndex(0);
     if (mobile) setSheetExpanded(false);
   }, [clearPlayTimer, mobile]);
 
   const focusId =
-    playing || paused ? currentStep?.nodeId ?? null : hoverId ?? selectedId;
+    playing || paused
+      ? currentStep?.nodeId ?? null
+      : playComplete
+        ? scenario?.verdictNodeId ?? null
+        : hoverId ?? selectedId;
 
   const playHighlight = useMemo(() => {
-    if (!scenario || (!playing && !paused)) return null;
-    return computePlayHighlight(scenario.decidingPath, playPathIndex(scenario, stepIndex));
-  }, [scenario, playing, paused, stepIndex]);
+    if (!scenario) return null;
+    if (playComplete) {
+      return computePlayHighlight(scenario.decidingPath, scenario.decidingPath.length - 1);
+    }
+    if (playing || paused) {
+      return computePlayHighlight(scenario.decidingPath, playPathIndex(scenario, stepIndex));
+    }
+    return null;
+  }, [scenario, playing, paused, playComplete, stepIndex]);
 
   const panelContext: PanelContext = useMemo(() => {
-    if (playing || paused) {
+    if (playing || paused || playComplete) {
+      const lastStep = scenario?.steps[scenario.steps.length - 1];
       return {
         mode: 'play',
         scenario,
-        currentStep,
-        stepIndex,
+        currentStep: playComplete ? lastStep : currentStep,
+        stepIndex: playComplete ? (scenario?.steps.length ?? 1) - 1 : stepIndex,
         stepTotal: scenario?.steps.length,
       };
     }
     if (selectedId || hoverId) return { mode: 'inspect' };
     return { mode: 'idle' };
-  }, [playing, paused, scenario, currentStep, stepIndex, selectedId, hoverId]);
+  }, [playing, paused, playComplete, scenario, currentStep, stepIndex, selectedId, hoverId]);
 
   const panelNode = focusId ? NODE_BY_ID[focusId] ?? null : null;
 
@@ -221,6 +234,9 @@ function AppInner() {
       if (prev >= steps.length - 1) {
         setPlaying(false);
         setPaused(false);
+        setPlayComplete(true);
+        const s = SCENARIO_BY_ID[scenarioId];
+        if (s) setSelectedId(s.verdictNodeId);
         return prev;
       }
       return prev + 1;
@@ -231,6 +247,7 @@ function AppInner() {
     setStepIndex(0);
     setPlaying(true);
     setPaused(false);
+    setPlayComplete(false);
     setSelectedId(scenario?.steps[0]?.nodeId ?? null);
     if (mobile) setSheetExpanded(false);
   }, [scenario, mobile]);
@@ -266,6 +283,7 @@ function AppInner() {
     ({ nodes }: OnSelectionChangeParams) => {
       if (playing && !paused) return;
       const id = nodes.length === 1 ? nodes[0].id : null;
+      setPlayComplete(false);
       setSelectedId(id);
       if (mobile && id) setSheetExpanded(true);
     },
@@ -275,6 +293,7 @@ function AppInner() {
   const onNodeTap = useCallback(
     (id: string) => {
       if (playing && !paused) return;
+      setPlayComplete(false);
       setSelectedId(id);
       if (mobile) setSheetExpanded(true);
     },
