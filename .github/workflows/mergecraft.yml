@@ -31,7 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Run mergeCraft
-        uses: alexhawat/mergeCraft@v0.1.0a1
+        # Pinned to the commit mergeCraft's own workflow runs. `uses:` resolves
+        # action.yml AT THIS REF, and that file pins the container by digest —
+        # at this ref, ghcr.io/alexhawat/mergecraft@sha256:a980268d…, the same
+        # image upstream runs. The v0.1.0a1 tag `mergecraft init` scaffolded
+        # resolves to an OLDER image whose RepoSettings predates the trust /
+        # providers / providersSeeded keys the current CLI writes, so it failed
+        # config validation before it ever looked for a credential.
+        uses: alexhawat/mergeCraft@ae7710ee3b5bc4889360130dd3071ed500ab7319
         with:
           prompt: >
             ${{ github.event_name == 'pull_request'
@@ -45,7 +52,7 @@ jobs:
           # and resolve_action_pin_sha() reads exactly this name. Without it a
           # consumer install records an empty pin and cannot report a pin/image
           # mismatch (#641). Keep it equal to the `uses:` SHA above.
-          MERGECRAFT_ACTION_SHA: v0.1.0a1
+          MERGECRAFT_ACTION_SHA: ae7710ee3b5bc4889360130dd3071ed500ab7319
           # ChatGPT through the Codex harness, the same rung mergeCraft's own
           # repo runs (openai/gpt-terra, CODEX_AUTH_JSON + OPENAI_API_KEY).
           #
