@@ -21,6 +21,7 @@ import PlayStepRail from './components/PlayStepRail';
 import Toolbar from './components/Toolbar';
 import { FUNNEL_EDGES, NODE_BY_ID } from './funnelData';
 import { useMobileLayout } from './hooks/useMediaQuery';
+import { isPlayActive, isPlayInProgress, type PlayPhase } from './playPhase';
 import { computeHighlight, computePlayHighlight } from './pathUtils';
 import { DEFAULT_SCENARIO_ID, SCENARIO_BY_ID, type PlayScenario } from './scenarios';
 import { layoutFunnel } from './layoutElk';
@@ -51,8 +52,7 @@ function FunnelDiagram({
   focusId,
   hoverId,
   selectedId,
-  playing,
-  playComplete,
+  phase,
   playHighlight,
   hideLabels,
   mobile,
@@ -70,8 +70,7 @@ function FunnelDiagram({
   focusId: string | null;
   hoverId: string | null;
   selectedId: string | null;
-  playing: boolean;
-  playComplete: boolean;
+  phase: PlayPhase;
   playHighlight: ReturnType<typeof computePlayHighlight> | null;
   hideLabels: boolean;
   mobile: boolean;
@@ -84,6 +83,8 @@ function FunnelDiagram({
   onSelectionChange: (params: OnSelectionChangeParams) => void;
   onZoom: (zoom: number) => void;
 }) {
+  const playComplete = phase === 'complete';
+  const playing = phase === 'playing';
   const playMode = Boolean(playHighlight);
   const highlight = playHighlight ?? (focusId ? computeHighlight(focusId, FUNNEL_EDGES) : null);
   const hasFocus = Boolean(highlight && (focusId || playHighlight));
@@ -178,19 +179,29 @@ function AppInner() {
   const [inspectOpen, setInspectOpen] = useState(false);
 
   const [scenarioId, setScenarioId] = useState(DEFAULT_SCENARIO_ID);
-  const [playing, setPlaying] = useState(false);
-  const [paused, setPaused] = useState(false);
-  const [playComplete, setPlayComplete] = useState(false);
+  const [phase, setPhase] = useState<PlayPhase>('idle');
+  const [playGen, setPlayGen] = useState(0);
   const [stepIndex, setStepIndex] = useState(0);
   const [sheetExpanded, setSheetExpanded] = useState(false);
 
   const timerRef = useRef<number | null>(null);
-  const playCompleteRef = useRef(false);
+  const playGenRef = useRef(0);
+  const stepIndexRef = useRef(0);
+
   const scenario = SCENARIO_BY_ID[scenarioId];
   const hideLabels = zoom < LABEL_ZOOM_MIN;
   const currentStep = scenario?.steps[stepIndex];
-  const playInProgress = playing || paused;
-  const playActive = playInProgress || playComplete || playCompleteRef.current;
+  const playInProgress = isPlayInProgress(phase);
+  const playActive = isPlayActive(phase);
+  const playComplete = phase === 'complete';
+
+  useEffect(() => {
+    playGenRef.current = playGen;
+  }, [playGen]);
+
+  useEffect(() => {
+    stepIndexRef.current = stepIndex;
+  }, [stepIndex]);
 
   useEffect(() => {
     layoutFunnel().then(({ nodes, edges }) => {
@@ -215,36 +226,51 @@ function AppInner() {
     }
   }, []);
 
+  const bumpPlayGen = useCallback(() => {
+    setPlayGen((g) => g + 1);
+  }, []);
+
   const resetPlay = useCallback(() => {
+    bumpPlayGen();
     clearPlayTimer();
-    playCompleteRef.current = false;
-    setPlaying(false);
-    setPaused(false);
-    setPlayComplete(false);
+    setPhase('idle');
     setStepIndex(0);
     setHoverId(null);
     setSelectedId(null);
     setInspectOpen(false);
     setSheetExpanded(false);
     setResetToken((t) => t + 1);
-  }, [clearPlayTimer]);
+  }, [bumpPlayGen, clearPlayTimer]);
+
+  const onScenarioChange = useCallback(
+    (id: string) => {
+      bumpPlayGen();
+      clearPlayTimer();
+      setPhase('idle');
+      setStepIndex(0);
+      setHoverId(null);
+      setSelectedId(null);
+      setInspectOpen(false);
+      setSheetExpanded(false);
+      setScenarioId(id);
+      setResetToken((t) => t + 1);
+    },
+    [bumpPlayGen, clearPlayTimer],
+  );
 
   const focusId = playActive
-    ? playing || paused
+    ? playInProgress
       ? currentStep?.nodeId ?? null
       : scenario?.verdictNodeId ?? null
     : hoverId ?? selectedId;
 
   const playHighlight = useMemo(() => {
-    if (!scenario) return null;
-    if (playComplete || playCompleteRef.current) {
+    if (!scenario || phase === 'idle') return null;
+    if (phase === 'complete') {
       return computePlayHighlight(scenario.decidingPath, scenario.decidingPath.length - 1);
     }
-    if (playing || paused) {
-      return computePlayHighlight(scenario.decidingPath, playPathIndex(scenario, stepIndex));
-    }
-    return null;
-  }, [scenario, playing, paused, playComplete, stepIndex]);
+    return computePlayHighlight(scenario.decidingPath, playPathIndex(scenario, stepIndex));
+  }, [scenario, phase, stepIndex]);
 
   const selectionLocked = playActive;
 
@@ -254,47 +280,48 @@ function AppInner() {
   const inspectNode = selectedId ? NODE_BY_ID[selectedId] ?? null : null;
 
   const advanceStep = useCallback(() => {
-    setStepIndex((prev) => {
-      const steps = SCENARIO_BY_ID[scenarioId]?.steps ?? [];
-      if (prev >= steps.length - 1) {
-        const s = SCENARIO_BY_ID[scenarioId];
-        playCompleteRef.current = true;
-        setPlaying(false);
-        setPaused(false);
-        setPlayComplete(true);
-        setInspectOpen(false);
-        if (s) setSelectedId(s.verdictNodeId);
-        return prev;
-      }
-      return prev + 1;
-    });
-  }, [scenarioId]);
+    const gen = playGenRef.current;
+    const idx = stepIndexRef.current;
+    const steps = scenario?.steps ?? [];
+    if (idx >= steps.length - 1) {
+      if (gen !== playGenRef.current) return;
+      setPhase('complete');
+      setInspectOpen(false);
+      if (scenario) setSelectedId(scenario.verdictNodeId);
+      return;
+    }
+    if (gen !== playGenRef.current) return;
+    setStepIndex(idx + 1);
+  }, [scenario]);
 
   const startPlay = useCallback(() => {
-    playCompleteRef.current = false;
+    bumpPlayGen();
+    clearPlayTimer();
     setStepIndex(0);
-    setPlaying(true);
-    setPaused(false);
-    setPlayComplete(false);
+    setPhase('playing');
     setInspectOpen(false);
     setSelectedId(scenario?.steps[0]?.nodeId ?? null);
     if (mobile) setSheetExpanded(true);
-  }, [scenario, mobile]);
+  }, [scenario, mobile, bumpPlayGen, clearPlayTimer]);
 
   useEffect(() => {
-    if (!playing || paused || !currentStep) {
+    if (phase !== 'playing' || !currentStep) {
       clearPlayTimer();
       return;
     }
-    timerRef.current = window.setTimeout(advanceStep, currentStep.dwellMs);
+    const gen = playGenRef.current;
+    timerRef.current = window.setTimeout(() => {
+      if (gen !== playGenRef.current) return;
+      advanceStep();
+    }, currentStep.dwellMs);
     return clearPlayTimer;
-  }, [playing, paused, stepIndex, currentStep, advanceStep, clearPlayTimer]);
+  }, [phase, stepIndex, currentStep, advanceStep, clearPlayTimer]);
 
   useEffect(() => {
-    if ((playing || paused) && currentStep) {
+    if (playInProgress && currentStep) {
       setSelectedId(currentStep.nodeId);
     }
-  }, [stepIndex, playing, paused, currentStep]);
+  }, [stepIndex, playInProgress, currentStep]);
 
   useEffect(() => {
     if (playInProgress && mobile) setSheetExpanded(true);
@@ -303,6 +330,8 @@ function AppInner() {
   useEffect(() => {
     if (playComplete && mobile) setSheetExpanded(false);
   }, [playComplete, mobile]);
+
+  useEffect(() => () => clearPlayTimer(), [clearPlayTimer]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -320,23 +349,22 @@ function AppInner() {
 
   const onSelectionChange = useCallback(
     ({ nodes }: OnSelectionChangeParams) => {
-      if (playing && !paused) return;
-      if (playCompleteRef.current || playComplete) return;
+      if (phase === 'playing') return;
+      if (phase === 'complete') return;
       const id = nodes.length === 1 ? nodes[0].id : null;
       setSelectedId(id);
       setInspectOpen(Boolean(id));
       if (mobile && id) setSheetExpanded(true);
     },
-    [playing, paused, playComplete, mobile],
+    [phase, mobile],
   );
 
   const onNodeTap = useCallback(
     (id: string) => {
-      if (playing && !paused) return;
-      if (playCompleteRef.current || playComplete) {
+      if (phase === 'playing') return;
+      if (phase === 'complete') {
         if (id !== scenario?.verdictNodeId) {
-          playCompleteRef.current = false;
-          setPlayComplete(false);
+          setPhase('idle');
           setSelectedId(id);
           setInspectOpen(true);
           if (mobile) setSheetExpanded(true);
@@ -349,18 +377,11 @@ function AppInner() {
       setInspectOpen(true);
       if (mobile) setSheetExpanded(true);
     },
-    [playing, paused, playComplete, scenario, mobile],
+    [phase, scenario, mobile],
   );
 
-  const onScenarioChange = useCallback(
-    (id: string) => {
-      resetPlay();
-      setScenarioId(id);
-    },
-    [resetPlay],
-  );
-
-  const playFocusActive = playActive && !paused;
+  const playFocusActive = playInProgress;
+  const flowRemountKey = `${scenarioId}-${resetToken}`;
 
   return (
     <div className={`app-shell ${mobile ? 'app-shell--mobile' : ''}`}>
@@ -382,14 +403,13 @@ function AppInner() {
       <Toolbar
         scenarioId={scenarioId}
         onScenarioChange={onScenarioChange}
-        playing={playing}
-        paused={paused}
+        phase={phase}
         canPlay={ready}
         onPlay={() => {
-          if (paused) setPaused(false);
+          if (phase === 'paused') setPhase('playing');
           else startPlay();
         }}
-        onPause={() => setPaused(true)}
+        onPause={() => setPhase('paused')}
         onReset={resetPlay}
         stepIndex={displayStepIndex}
         stepCount={scenario?.steps.length ?? 0}
@@ -418,13 +438,13 @@ function AppInner() {
         <div className="flow-wrap">
           {ready ? (
             <FunnelDiagram
+              key={flowRemountKey}
               baseNodes={baseNodes}
               baseEdges={baseEdges}
               focusId={focusId}
               hoverId={hoverId}
               selectedId={selectedId}
-              playing={playing && !paused}
-              playComplete={playComplete}
+              phase={phase}
               playHighlight={playHighlight}
               hideLabels={hideLabels}
               mobile={mobile}

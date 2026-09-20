@@ -1,10 +1,11 @@
+import type { PlayPhase } from '../playPhase';
+import { isPlayInProgress } from '../playPhase';
 import { PLAY_SCENARIOS } from '../scenarios';
 
 type Props = {
   scenarioId: string;
   onScenarioChange: (id: string) => void;
-  playing: boolean;
-  paused: boolean;
+  phase: PlayPhase;
   canPlay: boolean;
   onPlay: () => void;
   onPause: () => void;
@@ -17,8 +18,7 @@ type Props = {
 export default function Toolbar({
   scenarioId,
   onScenarioChange,
-  playing,
-  paused,
+  phase,
   canPlay,
   onPlay,
   onPause,
@@ -27,6 +27,9 @@ export default function Toolbar({
   stepCount,
   mobile = false,
 }: Props) {
+  const playing = phase === 'playing';
+  const paused = phase === 'paused';
+
   return (
     <div className={`toolbar ${mobile ? 'toolbar--mobile' : ''}`}>
       <div className="toolbar-row toolbar-row--primary">
@@ -39,7 +42,7 @@ export default function Toolbar({
             className="toolbar-select"
             value={scenarioId}
             onChange={(e) => onScenarioChange(e.target.value)}
-            disabled={playing && !paused}
+            disabled={phase === 'playing'}
           >
             {PLAY_SCENARIOS.map((s) => (
               <option key={s.id} value={s.id}>
@@ -49,7 +52,7 @@ export default function Toolbar({
           </select>
         </div>
         <div className="toolbar-group toolbar-actions">
-          {playing && !paused ? (
+          {playing ? (
             <button type="button" className="toolbar-btn" onClick={onPause}>
               Pause
             </button>
@@ -63,7 +66,7 @@ export default function Toolbar({
           </button>
         </div>
       </div>
-      {(playing || paused) && stepCount > 0 ? (
+      {isPlayInProgress(phase) && stepCount > 0 ? (
         <div className="toolbar-progress">
           Step {Math.min(stepIndex + 1, stepCount)} / {stepCount}
         </div>
