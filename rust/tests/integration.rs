@@ -5,6 +5,7 @@ use judge_jev::funnel::{replay_judgment, run_judgment};
 use judge_jev::models::{Answer, SavedJudgment};
 use judge_jev::routing::{decision_confidence, route_verdict};
 use judge_jev::rubric::load_rubric;
+use judge_jev::EXIT_USAGE;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -438,4 +439,110 @@ fn operator_is_read_from_the_rubric() {
     let rubric = judge_jev::rubric::parse_rubric(&flipped).expect("edited rubric");
     // healthy() has locate.harmful = 0.02, which now satisfies "< 0.8".
     assert_eq!(route_verdict(&rubric, &healthy()).verdict, "escalate");
+}
+
+// --- CLI usage contract --------------------------------------------------------
+
+/// Run the real binary with a fixed repo root, returning (exit code, stderr).
+fn cli(args: &[&str]) -> (i32, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_judge-jev"))
+        .args(args)
+        .env("JUDGE_JEV_ROOT", repo())
+        // A malformed command line must never reach the API, so make sure there is
+        // no key to reach it with.
+        .env_remove("TYPESAFE_API_KEY")
+        .output()
+        .expect("run judge-jev");
+    (
+        out.status.code().expect("exit code"),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+#[test]
+fn usage_errors_exit_11_and_say_why() {
+    // 11, never 2: 2 is EXIT_REVIEW and a hook branching on the code would file an
+    // action nobody judged for human review.
+    let cases: Vec<(Vec<&str>, &str)> = vec![
+        // The bug this test exists for: a typo'd --mock used to be ignored, leaving
+        // mock=false, so a call the operator believed was mocked was billed live.
+        (
+            vec![
+                "run",
+                "--rubric",
+                "assistant-reply",
+                "--input",
+                "x.json",
+                "--mok",
+            ],
+            "unrecognized flag: --mok",
+        ),
+        (
+            vec![
+                "run",
+                "--rubric",
+                "assistant-reply",
+                "--rubric",
+                "agent-trajectory",
+                "--input",
+                "x.json",
+            ],
+            "--rubric given more than once",
+        ),
+        (
+            vec!["run", "--input", "x.json", "--mock", "--rubric"],
+            "--rubric needs a value",
+        ),
+        (
+            vec!["run", "--input", "x.json", "--mock"],
+            "--rubric is required",
+        ),
+        (
+            vec!["run", "--rubric", "assistant-reply", "--mock"],
+            "--input is required",
+        ),
+        (vec![], "a command is required"),
+        (vec!["bogus"], "unknown command: bogus"),
+        (vec!["rubric"], "rubric needs a subcommand: list or show"),
+        (vec!["rubric", "bogus"], "unknown rubric command: bogus"),
+        (
+            vec!["replay", "--input", "x.json", "--mock"],
+            "unrecognized flag: --mock",
+        ),
+        (
+            vec![
+                "run",
+                "--rubric",
+                "assistant-reply",
+                "--input",
+                "x.json",
+                "extra",
+            ],
+            "unexpected argument: extra",
+        ),
+    ];
+
+    for (args, message) in cases {
+        let (code, stderr) = cli(&args);
+        assert_eq!(code, EXIT_USAGE, "args {args:?} stderr: {stderr}");
+        assert!(
+            stderr.contains(message),
+            "args {args:?} stderr {stderr} missing {message}"
+        );
+    }
+}
+
+#[test]
+fn a_typo_never_silently_drops_mock() {
+    // Without --mock the run goes live; with no API key that is an operational
+    // failure. The point is that it is 11 (we refused) and not 10 (we tried).
+    let (code, _) = cli(&[
+        "run",
+        "--rubric",
+        "assistant-reply",
+        "--input",
+        "fixtures/assistant-reply-pass.json",
+        "--mok",
+    ]);
+    assert_eq!(code, EXIT_USAGE);
 }

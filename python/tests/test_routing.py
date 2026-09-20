@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from judge_jev.cli import EXIT_ERROR, main
+from judge_jev.cli import EXIT_ERROR, EXIT_REVIEW, EXIT_USAGE, main
 from judge_jev.funnel import replay_judgment, run_judgment
 from judge_jev.models import RubricError
 from judge_jev.routing import decision_confidence, route_verdict
@@ -350,3 +350,41 @@ def test_operational_failures_exit_distinctly_from_fail(argv, capsys):
     err = capsys.readouterr().err
     assert "judge-jev:" in err
     assert "Traceback" not in err
+
+
+# --- CLI usage contract --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv,message",
+    [
+        # A typo used to be dropped on the floor. In the Rust runtime that silently
+        # cleared --mock and billed a live call; here argparse exited 2, which IS
+        # the review verdict.
+        (["run", "--rubric", "assistant-reply", "--input", "x.json", "--mok"],
+         "unrecognized flag: --mok"),
+        (["run", "--rubric", "assistant-reply", "--rubric", "agent-trajectory", "--input", "x.json"],
+         "--rubric given more than once"),
+        (["run", "--input", "x.json", "--mock", "--rubric"], "--rubric needs a value"),
+        (["run", "--input", "x.json", "--mock"], "--rubric is required"),
+        (["run", "--rubric", "assistant-reply", "--mock"], "--input is required"),
+        ([], "a command is required"),
+        (["bogus"], "unknown command: bogus"),
+        (["rubric"], "rubric needs a subcommand: list or show"),
+        (["rubric", "bogus"], "unknown rubric command: bogus"),
+        (["replay", "--input", "x.json", "--mock"], "unrecognized flag: --mock"),
+        (["run", "--rubric", "assistant-reply", "--input", "x.json", "extra"],
+         "unexpected argument: extra"),
+    ],
+)
+def test_usage_errors_exit_11_and_say_why(argv, message, capsys):
+    """11, never 2. 2 is EXIT_REVIEW and a hook would queue an unjudged action."""
+    code = main(argv)
+    assert code == EXIT_USAGE
+    assert code != EXIT_REVIEW
+    assert message in capsys.readouterr().err
+
+
+def test_help_still_exits_zero(capsys):
+    assert main(["--help"]) == 0
+    assert "judge-jev" in capsys.readouterr().out
