@@ -499,7 +499,11 @@ body {
 }
 
 .edge-label.is-dimmed {
-  opacity: 0.2;
+  opacity: 0.12;
+}
+
+.edge-label.is-dimmed:not(.is-active) {
+  visibility: hidden;
 }
 
 .edge-label.is-active {

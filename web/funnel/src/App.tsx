@@ -50,10 +50,12 @@ function FunnelDiagram({
   hoverId,
   selectedId,
   playing,
+  playComplete,
   playHighlight,
   hideLabels,
   mobile,
   playFocusActive,
+  selectionLocked,
   onHover,
   onNodeTap,
   onSelectionChange,
@@ -66,16 +68,19 @@ function FunnelDiagram({
   hoverId: string | null;
   selectedId: string | null;
   playing: boolean;
+  playComplete: boolean;
   playHighlight: ReturnType<typeof computePlayHighlight> | null;
   hideLabels: boolean;
   mobile: boolean;
   playFocusActive: boolean;
+  selectionLocked: boolean;
   onHover: (id: string | null) => void;
   onNodeTap: (id: string) => void;
   onSelectionChange: (params: OnSelectionChangeParams) => void;
   onZoom: (zoom: number) => void;
   ready: boolean;
 }) {
+  const playMode = Boolean(playHighlight);
   const highlight = playHighlight ?? computeHighlight(focusId, FUNNEL_EDGES);
   const hasFocus = Boolean(focusId || playHighlight);
 
@@ -83,24 +88,37 @@ function FunnelDiagram({
     return baseNodes.map((n) => {
       let visualState: NodeVisualState = 'idle';
       if (focusId === n.id && playing) visualState = 'playing';
+      else if (focusId === n.id && playComplete) visualState = 'selected';
       else if (hoverId === n.id && hoverId !== selectedId) visualState = 'hover';
       else if (selectedId === n.id || focusId === n.id) visualState = 'selected';
       else if (hasFocus && !highlight.nodes.has(n.id)) visualState = 'dimmed';
-      return { ...n, data: { ...n.data, visualState } };
+      const selected = selectionLocked ? n.id === focusId : selectedId === n.id;
+      return { ...n, selected, data: { ...n.data, visualState } };
     });
-  }, [baseNodes, focusId, hoverId, selectedId, playing, hasFocus, highlight.nodes]);
+  }, [
+    baseNodes,
+    focusId,
+    hoverId,
+    selectedId,
+    playing,
+    playComplete,
+    hasFocus,
+    highlight.nodes,
+    selectionLocked,
+  ]);
 
   const edges = useMemo(() => {
     return baseEdges.map((e) => {
       const active = highlight.edgeIds.has(e.id);
       const dimmed = hasFocus && !active;
+      const hideEdgeLabel = hideLabels || (playMode && Boolean(e.label) && !active);
       return {
         ...e,
         animated: active,
-        data: { ...e.data, active, dimmed, hideLabel: hideLabels },
+        data: { ...e.data, active, dimmed, hideLabel: hideEdgeLabel },
       };
     });
-  }, [baseEdges, highlight.edgeIds, hasFocus, hideLabels]);
+  }, [baseEdges, highlight.edgeIds, hasFocus, hideLabels, playMode]);
 
   const onMove: OnMove = useCallback(
     (_evt, viewport) => {
@@ -115,16 +133,20 @@ function FunnelDiagram({
       edges={edges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
-      onSelectionChange={onSelectionChange}
+      onSelectionChange={selectionLocked ? undefined : onSelectionChange}
       onNodeMouseEnter={(_, node) => {
-        if (!mobile) onHover(node.id);
+        if (!mobile && !playComplete) onHover(node.id);
       }}
       onNodeMouseLeave={() => {
-        if (!mobile) onHover(null);
+        if (!mobile && !playComplete) onHover(null);
       }}
       onNodeClick={(_, node) => onNodeTap(node.id)}
-      onPaneClick={() => onHover(null)}
+      onPaneClick={() => {
+        if (!playComplete) onHover(null);
+      }}
       onMove={onMove}
+      nodesFocusable={!selectionLocked}
+      elementsSelectable={!selectionLocked}
       minZoom={0.55}
       maxZoom={1.6}
       panOnScroll={false}
@@ -157,6 +179,8 @@ function AppInner() {
   const [sheetExpanded, setSheetExpanded] = useState(false);
 
   const timerRef = useRef<number | null>(null);
+  /** Sync guard — RF onSelectionChange can fire before playComplete state commits. */
+  const playCompleteRef = useRef(false);
   const scenario = SCENARIO_BY_ID[scenarioId];
   const hideLabels = zoom < LABEL_ZOOM_MIN;
   const currentStep = scenario?.steps[stepIndex];
@@ -186,6 +210,7 @@ function AppInner() {
 
   const resetPlay = useCallback(() => {
     clearPlayTimer();
+    playCompleteRef.current = false;
     setPlaying(false);
     setPaused(false);
     setPlayComplete(false);
@@ -202,7 +227,7 @@ function AppInner() {
 
   const playHighlight = useMemo(() => {
     if (!scenario) return null;
-    if (playComplete) {
+    if (playComplete || playCompleteRef.current) {
       return computePlayHighlight(scenario.decidingPath, scenario.decidingPath.length - 1);
     }
     if (playing || paused) {
@@ -210,6 +235,8 @@ function AppInner() {
     }
     return null;
   }, [scenario, playing, paused, playComplete, stepIndex]);
+
+  const selectionLocked = playing || paused || playComplete || playCompleteRef.current;
 
   const panelContext: PanelContext = useMemo(() => {
     if (playing || paused || playComplete) {
@@ -232,10 +259,11 @@ function AppInner() {
     setStepIndex((prev) => {
       const steps = SCENARIO_BY_ID[scenarioId]?.steps ?? [];
       if (prev >= steps.length - 1) {
+        const s = SCENARIO_BY_ID[scenarioId];
+        playCompleteRef.current = true;
         setPlaying(false);
         setPaused(false);
         setPlayComplete(true);
-        const s = SCENARIO_BY_ID[scenarioId];
         if (s) setSelectedId(s.verdictNodeId);
         return prev;
       }
@@ -244,6 +272,7 @@ function AppInner() {
   }, [scenarioId]);
 
   const startPlay = useCallback(() => {
+    playCompleteRef.current = false;
     setStepIndex(0);
     setPlaying(true);
     setPaused(false);
@@ -282,22 +311,30 @@ function AppInner() {
   const onSelectionChange = useCallback(
     ({ nodes }: OnSelectionChangeParams) => {
       if (playing && !paused) return;
+      if (playCompleteRef.current || playComplete) return;
       const id = nodes.length === 1 ? nodes[0].id : null;
-      setPlayComplete(false);
       setSelectedId(id);
       if (mobile && id) setSheetExpanded(true);
     },
-    [playing, paused, mobile],
+    [playing, paused, playComplete, mobile],
   );
 
   const onNodeTap = useCallback(
     (id: string) => {
       if (playing && !paused) return;
-      setPlayComplete(false);
+      if (playCompleteRef.current || playComplete) {
+        if (id !== scenario?.verdictNodeId) {
+          playCompleteRef.current = false;
+          setPlayComplete(false);
+          setSelectedId(id);
+          if (mobile) setSheetExpanded(true);
+        }
+        return;
+      }
       setSelectedId(id);
       if (mobile) setSheetExpanded(true);
     },
-    [playing, paused, mobile],
+    [playing, paused, playComplete, scenario, mobile],
   );
 
   const onScenarioChange = (id: string) => {
@@ -306,7 +343,7 @@ function AppInner() {
     setSelectedId(null);
   };
 
-  const playFocusActive = mobile && playing && !paused;
+  const playFocusActive = mobile && (playing || playComplete) && !paused;
 
   return (
     <div className={`app-shell ${mobile ? 'app-shell--mobile' : ''}`}>
@@ -352,10 +389,12 @@ function AppInner() {
               hoverId={hoverId}
               selectedId={selectedId}
               playing={playing && !paused}
+              playComplete={playComplete}
               playHighlight={playHighlight}
               hideLabels={hideLabels}
               mobile={mobile}
               playFocusActive={playFocusActive}
+              selectionLocked={selectionLocked}
               ready={ready}
               onHover={setHoverId}
               onNodeTap={onNodeTap}

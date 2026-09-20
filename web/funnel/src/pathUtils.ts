@@ -56,15 +56,6 @@ export function pathEdges(nodePath: string[], edges: EdgeDef[] = FUNNEL_EDGES): 
   return ids;
 }
 
-export function neighborsOf(nodeId: string, edges: EdgeDef[] = FUNNEL_EDGES): Set<string> {
-  const out = new Set<string>();
-  for (const e of edges) {
-    if (e.source === nodeId) out.add(e.target);
-    if (e.target === nodeId) out.add(e.source);
-  }
-  return out;
-}
-
 export interface HighlightResult {
   nodes: Set<string>;
   edgeIds: Set<string>;

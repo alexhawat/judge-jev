@@ -35,16 +35,16 @@ export interface PlayScenario {
   steps: PlayStep[];
 }
 
-/** Play pacing (~1.5–1.7× prior dwells): deciding steps slower, lighter steps still shorter. */
-const DWELL_SETUP = 1400;
-const DWELL_BATCHED = 1440;
-const DWELL_ANSWERS = 1200;
-const DWELL_ROUTE = 1600;
-const DWELL_FLOOR = 1600;
-const DWELL_VERDICT = 1700;
-const DWELL_RESULT = 1200;
-const DWELL_DECIDING = 1600;
-const DWELL_DECIDING_KEY = 1750;
+/** Play pacing — deliberately slow so each deciding step is readable (~3s on key stages). */
+const DWELL_SETUP = 2200;
+const DWELL_BATCHED = 2400;
+const DWELL_ANSWERS = 2000;
+const DWELL_ROUTE = 2800;
+const DWELL_FLOOR = 2800;
+const DWELL_VERDICT = 3200;
+const DWELL_RESULT = 2000;
+const DWELL_DECIDING = 3000;
+const DWELL_DECIDING_KEY = 3000;
 
 const SETUP: PlayStep[] = [
   {

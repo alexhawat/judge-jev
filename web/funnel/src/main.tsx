@@ -1,3 +1,4 @@
+/** funnel preview build — bump when redeploying Pages cache-bust */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
