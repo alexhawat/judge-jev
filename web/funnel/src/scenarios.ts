@@ -35,17 +35,28 @@ export interface PlayScenario {
   steps: PlayStep[];
 }
 
+/** Play pacing (~1.5–1.7× prior dwells): deciding steps slower, lighter steps still shorter. */
+const DWELL_SETUP = 1400;
+const DWELL_BATCHED = 1440;
+const DWELL_ANSWERS = 1200;
+const DWELL_ROUTE = 1600;
+const DWELL_FLOOR = 1600;
+const DWELL_VERDICT = 1700;
+const DWELL_RESULT = 1200;
+const DWELL_DECIDING = 1600;
+const DWELL_DECIDING_KEY = 1750;
+
 const SETUP: PlayStep[] = [
   {
     nodeId: 'input',
     deciding: true,
-    dwellMs: 850,
+    dwellMs: DWELL_SETUP,
     stepNote: 'Load JSON artifact under test (prompt, reply, optional context).',
   },
   {
     nodeId: 'state-filter',
     deciding: true,
-    dwellMs: 850,
+    dwellMs: DWELL_SETUP,
     stepNote: 'Keep only rubric state_filter keys; strip _mock_answers before TypeSafe.',
   },
 ];
@@ -53,21 +64,21 @@ const SETUP: PlayStep[] = [
 const JEV_BATCHED = (extra: string): PlayStep => ({
   nodeId: 'jev-call',
   deciding: true,
-  dwellMs: 900,
+  dwellMs: DWELL_BATCHED,
   stepNote: `One batched system_one (jev-1.13.0). ${extra}`,
 });
 
 const ANSWERS: PlayStep = {
   nodeId: 'answers',
   deciding: true,
-  dwellMs: 800,
+  dwellMs: DWELL_ANSWERS,
   stepNote: 'Normalize noul / choice / score answers from the batched response.',
 };
 
 const ROUTE: PlayStep = {
   nodeId: 'route',
   deciding: true,
-  dwellMs: 950,
+  dwellMs: DWELL_ROUTE,
   stepNote: 'Evaluate YAML rules in order; first matching all conditions wins.',
 };
 
@@ -77,7 +88,7 @@ function tail(verdictNodeId: string, reason: string, viaFloor: boolean): PlaySte
     out.push({
       nodeId: 'confidence-floor',
       deciding: true,
-      dwellMs: 950,
+      dwellMs: DWELL_FLOOR,
       stepNote:
         verdictNodeId === 'verdict-review'
           ? 'pass rule matched but confidence min(deciding) < read_only floor 0.50 → review.'
@@ -87,13 +98,13 @@ function tail(verdictNodeId: string, reason: string, viaFloor: boolean): PlaySte
   out.push({
     nodeId: verdictNodeId,
     deciding: true,
-    dwellMs: 1000,
+    dwellMs: DWELL_VERDICT,
     stepNote: reason,
   });
   out.push({
     nodeId: 'result',
     deciding: true,
-    dwellMs: 800,
+    dwellMs: DWELL_RESULT,
     stepNote: 'Emit JudgmentResult JSON on stdout with verdict, confidence, deciding_answers.',
   });
   return out;
@@ -131,7 +142,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
       {
         nodeId: 'score',
         deciding: true,
-        dwellMs: 950,
+        dwellMs: DWELL_DECIDING,
         stepNote: 'score.helpfulness 3.2 ≥ 2.0 · score.coherence 3.5 ≥ 2.0 — pass rule matches.',
         showAnswers: ['score.helpfulness', 'score.coherence'],
       },
@@ -175,14 +186,14 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
       {
         nodeId: 'profile',
         deciding: true,
-        dwellMs: 950,
+        dwellMs: DWELL_DECIDING,
         stepNote: 'profile.intent == refusal (confidence 0.88).',
         showAnswers: ['profile.intent'],
       },
       {
         nodeId: 'score',
         deciding: true,
-        dwellMs: 950,
+        dwellMs: DWELL_DECIDING,
         stepNote: 'score.helpfulness 0.4 < 1.5 — paired with refusal → fail rule.',
         showAnswers: ['score.helpfulness'],
       },
@@ -223,7 +234,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
       {
         nodeId: 'route-q',
         deciding: true,
-        dwellMs: 950,
+        dwellMs: DWELL_DECIDING,
         stepNote: 'route.escalate noul 0.85 ≥ 0.7 — human review before acting on reply.',
         showAnswers: ['route.escalate'],
       },
@@ -266,7 +277,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
       {
         nodeId: 'screen',
         deciding: true,
-        dwellMs: 1000,
+        dwellMs: DWELL_DECIDING_KEY,
         stepNote: 'screen.injection noul 0.82 ≥ 0.7 — injection rule fires before profile/locate/score matter.',
         showAnswers: ['screen.injection'],
       },
@@ -310,7 +321,7 @@ export const PLAY_SCENARIOS: PlayScenario[] = [
       {
         nodeId: 'score',
         deciding: true,
-        dwellMs: 950,
+        dwellMs: DWELL_DECIDING,
         stepNote: 'helpfulness 3.0 ≥ 2 · coherence 3.0 ≥ 2 — pass rule matches on scores.',
         showAnswers: ['score.helpfulness', 'score.coherence'],
       },
