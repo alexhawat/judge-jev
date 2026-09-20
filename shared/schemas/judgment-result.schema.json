@@ -6,6 +6,7 @@
   "type": "object",
   "required": [
     "rubric_id",
+    "rubric_version",
     "verdict",
     "confidence",
     "stage",
@@ -15,11 +16,26 @@
     "routing_reason",
     "mock",
     "deciding_answers",
-    "confidence_floor"
+    "confidence_floor",
+    "runtime"
   ],
   "additionalProperties": false,
   "properties": {
     "rubric_id": { "type": "string" },
+    "rubric_version": {
+      "type": "string",
+      "description": "The rubric version in force when this judgment was made. `replay` compares it against the rubric on disk and refuses on a mismatch, so a threshold change cannot silently re-decide a past verdict."
+    },
+    "runtime": {
+      "type": "object",
+      "description": "The build that produced this result. The two runtimes must agree on every other field; this is the one they are supposed to differ on.",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "enum": ["python", "rust"] },
+        "version": { "type": "string" }
+      }
+    },
     "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
     "confidence": {
       "type": "number",
@@ -39,9 +55,13 @@
       "description": "Answer IDs the matched rule read. Only these contribute to confidence."
     },
     "stage": { "type": "string", "enum": ["screen", "profile", "locate", "score", "route"] },
-    "model": { "type": "string" },
+    "model": {
+      "type": "string",
+      "description": "The model that answered, as the API reported it — not necessarily the model the rubric asked for, since the API may resolve an alias. Under --mock nothing answers, so it is the requested model."
+    },
     "usage": {
       "type": "object",
+      "description": "Token counts. Both fields are always present and are null when the API reported none, so a result has one shape whichever runtime produced it.",
       "properties": {
         "input_tokens": { "type": ["integer", "null"] },
         "output_tokens": { "type": ["integer", "null"] }

@@ -24,14 +24,20 @@ bash examples/run-all.sh                 # six end-to-end examples, mocked and o
 | Command | Description |
 |---------|-------------|
 | `judge-jev setup` | Choose/install runtime |
-| `judge-jev run --rubric <id> --input <path> [--mock]` | Run funnel → JSON `JudgmentResult` on stdout |
+| `judge-jev run --rubric <id> --input <path\|-> [--mock]` | Run funnel → JSON `JudgmentResult` on stdout |
 | `judge-jev rubric list\|show --id <id>` | Inspect shared rubrics |
-| `judge-jev replay --input <result.json>` | Re-route saved answers |
+| `judge-jev replay --input <result.json\|-> [--allow-version-drift]` | Re-route saved answers |
+| `judge-jev --version` | Print the runtime and its version |
 
 Exit codes — verdicts: `0` pass, `1` fail, `2` review, `3` escalate, `4` skip.
 Operational failure (the judgment did not happen): `10` error, `11` usage. These are
 kept clear of the verdict range so a crash can never be read as a verdict of `fail`.
 JSON goes to stdout, logs to stderr, so `judge-jev run ... | jq` works.
+A malformed command line is `11` in both runtimes, with the same message — never
+`2`, which is the `review` verdict.
+
+`--input -` reads stdin, so a hook can pipe the state it already has instead of
+writing a temp file, and `run | replay` composes.
 
 Use `./scripts/judge-jev` from repo root (dispatches via `.judge-jev/runtime`).
 

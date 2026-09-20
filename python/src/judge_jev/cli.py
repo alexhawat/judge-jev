@@ -11,16 +11,19 @@ from typing import NoReturn
 from loguru import logger
 
 from judge_jev.funnel import read_input_text, replay_judgment, run_judgment
-from judge_jev.models import RubricError
+from judge_jev.models import RUNTIME_NAME, RUNTIME_VERSION, RubricError
 from judge_jev.rubric import list_rubric_ids, show_rubric
 from judge_jev.setup_cmd import run_setup
 from judge_jev.typesafe_client import JudgeJevError
 
 USAGE = """usage: judge-jev <setup|run|rubric|replay> ...
   setup
-  run    --rubric <id> --input <file.json> [--mock]
-  replay --input <result.json>
-  rubric list | show --id <id>"""
+  run    --rubric <id> --input <file.json|-> [--mock]
+  replay --input <result.json|-> [--allow-version-drift]
+  rubric list | show --id <id>
+  --version"""
+
+VERSION_LINE = f"judge-jev {RUNTIME_VERSION} ({RUNTIME_NAME})"
 
 # Verdict codes. These are a contract: hooks and CI branch on them.
 EXIT_OK = 0
@@ -58,7 +61,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         saved = json.loads(text)
     except json.JSONDecodeError as err:
         raise JudgeJevError(f"input {path} is not valid JSON: {err}") from err
-    result = replay_judgment(saved)
+    result = replay_judgment(saved, allow_version_drift=args.allow_version_drift)
     print(json.dumps(result.to_dict(), indent=2))
     return _exit_for_verdict(result.verdict)
 
@@ -106,11 +109,15 @@ def _precheck(argv: list[str]) -> str | None:
     if not argv:
         return "a command is required"
 
+    # A lone --version is a deliberate, successful exit, not a command.
+    if argv == ["--version"]:
+        return None
+
     command, rest = argv[0], argv[1:]
     grammar: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         "setup": ((), ()),
         "run": (("--rubric", "--input"), ("--mock",)),
-        "replay": (("--input",), ()),
+        "replay": (("--input",), ("--allow-version-drift",)),
     }
 
     if command == "rubric":
@@ -171,6 +178,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     replay_p = sub.add_parser("replay", help="Re-route from saved JudgmentResult JSON")
     replay_p.add_argument("--input", required=True)
+    replay_p.add_argument(
+        "--allow-version-drift",
+        action="store_true",
+        help="Route saved answers against a rubric version they were not judged under",
+    )
 
     rubric_p = sub.add_parser("rubric", help="Rubric commands")
     rubric_sub = rubric_p.add_subparsers(dest="rubric_cmd", required=True)
@@ -185,6 +197,13 @@ def main(argv: list[str] | None = None) -> int:
     logger.remove()
     logger.add(sys.stderr, level="INFO")
     raw = list(sys.argv[1:] if argv is None else argv)
+
+    # Printing the version is a deliberate, successful exit. It is answered before
+    # the parser so `judge-jev --version` needs no subcommand, matching the Rust
+    # runtime and the convention every CLI follows.
+    if raw == ["--version"]:
+        print(VERSION_LINE)
+        return EXIT_OK
 
     # `--help` is a successful, deliberate exit and keeps status 0; everything else
     # malformed is a usage error, which is 11.

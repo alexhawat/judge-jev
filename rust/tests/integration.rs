@@ -304,7 +304,7 @@ fn replay_preserves_answers_and_verdict() {
         true,
     )
     .expect("run");
-    let replayed = replay_judgment(&saved.as_saved()).expect("replay");
+    let replayed = replay_judgment(&saved.as_saved(), false).expect("replay");
     assert_eq!(replayed.verdict, saved.verdict);
     assert_eq!(replayed.answers.len(), saved.answers.len());
     assert!((replayed.confidence - saved.confidence).abs() < 1e-9);
@@ -321,7 +321,7 @@ fn recorded_live_answers_route_the_same_as_python() {
     )
     .expect("recorded fixture");
     let saved: SavedJudgment = serde_json::from_str(&text).expect("parse recorded result");
-    let result = replay_judgment(&saved).expect("replay");
+    let result = replay_judgment(&saved, true).expect("replay");
 
     assert!(matches!(
         result.answers.get("score.helpfulness"),
@@ -623,5 +623,146 @@ fn missing_input_message_is_the_shared_wording() {
     assert!(
         stderr.contains("cannot read input nope.json: No such file or directory (os error 2)"),
         "stderr: {stderr}"
+    );
+}
+
+/// Run the CLI and return (exit code, stdout, stderr).
+fn cli_out(args: &[&str]) -> (i32, String, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_judge-jev"))
+        .args(args)
+        .env("JUDGE_JEV_ROOT", repo())
+        .env_remove("TYPESAFE_API_KEY")
+        .output()
+        .expect("run judge-jev");
+    (
+        out.status.code().expect("exit code"),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+#[test]
+fn result_records_the_rubric_version_and_the_runtime_that_ran_it() {
+    let rubric = load_rubric("assistant-reply").expect("rubric");
+    let result = run_judgment(
+        "assistant-reply",
+        &fixtures().join("assistant-reply-pass.json"),
+        true,
+    )
+    .expect("run");
+
+    assert_eq!(result.rubric_version, rubric.version);
+    assert_eq!(result.runtime.name, "rust");
+    assert!(!result.runtime.version.is_empty());
+}
+
+#[test]
+fn result_matches_the_shared_schema() {
+    // The Python suite validates its output against judgment-result.schema.json;
+    // this runtime's shape was checked by nothing, which is how `usage` came to be
+    // emitted one way here and another way there. No jsonschema crate is pulled in
+    // for it — the two properties that actually caught that bug are the required
+    // key set and additionalProperties: false, and both are readable straight from
+    // the schema file.
+    let schema: Value = serde_json::from_str(
+        &std::fs::read_to_string(repo().join("shared/schemas/judgment-result.schema.json"))
+            .expect("read schema"),
+    )
+    .expect("parse schema");
+
+    let result = run_judgment(
+        "assistant-reply",
+        &fixtures().join("assistant-reply-pass.json"),
+        true,
+    )
+    .expect("run");
+    let emitted = serde_json::to_value(&result).expect("serialize result");
+    let emitted = emitted.as_object().expect("result is an object");
+
+    for key in schema["required"].as_array().expect("required") {
+        let key = key.as_str().expect("required key is a string");
+        assert!(
+            emitted.contains_key(key),
+            "result is missing required '{key}'"
+        );
+    }
+
+    let allowed = schema["properties"].as_object().expect("properties");
+    for key in emitted.keys() {
+        assert!(
+            allowed.contains_key(key),
+            "result carries '{key}', which the schema forbids (additionalProperties: false)"
+        );
+    }
+}
+
+#[test]
+fn replay_refuses_a_rubric_version_it_was_not_judged_under() {
+    let result = run_judgment(
+        "assistant-reply",
+        &fixtures().join("assistant-reply-pass.json"),
+        true,
+    )
+    .expect("run");
+
+    let mut saved = result.as_saved();
+    saved.rubric_version = Some("0.0.0-not-the-one-on-disk".to_string());
+
+    let refused = replay_judgment(&saved, false).expect_err("drifted replay must refuse");
+    assert!(
+        refused.to_string().contains("0.0.0-not-the-one-on-disk"),
+        "the refusal must name the version it was judged under: {refused}"
+    );
+
+    let routed = replay_judgment(&saved, true).expect("drift allowed");
+    // The result records the version it was ROUTED under, so the reason carries the
+    // original — otherwise the drift would leave no trace at all.
+    assert_eq!(
+        routed.rubric_version,
+        load_rubric("assistant-reply").expect("rubric").version
+    );
+    assert!(routed.routing_reason.contains("0.0.0-not-the-one-on-disk"));
+}
+
+#[test]
+fn replay_drift_is_exit_10_not_a_verdict() {
+    // A refused replay did not judge anything, so it must not look like one.
+    let dir = std::env::temp_dir().join(format!("judge-jev-drift-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("saved.json");
+
+    let (code, stdout, _) = cli_out(&[
+        "run",
+        "--rubric",
+        "assistant-reply",
+        "--input",
+        fixtures()
+            .join("assistant-reply-pass.json")
+            .to_str()
+            .expect("path"),
+        "--mock",
+    ]);
+    assert_eq!(code, 0);
+    let mut saved: Value = serde_json::from_str(&stdout).expect("parse result");
+    saved["rubric_version"] = Value::String("0.0.0-not-the-one-on-disk".into());
+    std::fs::write(&path, saved.to_string()).expect("write saved");
+
+    let input = path.to_str().expect("path");
+    assert_eq!(cli_out(&["replay", "--input", input]).0, 10);
+    assert_eq!(
+        cli_out(&["replay", "--input", input, "--allow-version-drift"]).0,
+        0
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn version_flag_names_the_runtime() {
+    let (code, stdout, _) = cli_out(&["--version"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout.trim(),
+        format!("judge-jev {} (rust)", judge_jev::models::RUNTIME_VERSION)
     );
 }

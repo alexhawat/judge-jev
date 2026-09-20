@@ -12,6 +12,7 @@ from judge_jev.funnel import replay_judgment, run_judgment
 from judge_jev.models import RubricError
 from judge_jev.routing import decision_confidence, route_verdict
 from judge_jev.rubric import load_rubric
+from judge_jev.typesafe_client import JudgeJevError
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = REPO / "fixtures"
@@ -310,10 +311,19 @@ def test_replay_preserves_answers_and_verdict():
 
 
 def test_recorded_live_answers_route_and_validate():
-    """Real API answers carry `legend`; routing and the schema must both accept them."""
+    """Real API answers carry `legend`; routing and the schema must both accept them.
+
+    The recorded fixture was saved before results carried provenance, so replaying it
+    is refused by default — it cannot say which rubric version produced it, which is
+    exactly the hole `rubric_version` closes. Routing it anyway is a deliberate act.
+    """
     jsonschema = pytest.importorskip("jsonschema")
     saved = json.loads((FIXTURES / "recorded" / "assistant-reply-live.json").read_text())
-    result = replay_judgment(saved)
+
+    with pytest.raises(JudgeJevError, match="carries no rubric_version"):
+        replay_judgment(saved)
+
+    result = replay_judgment(saved, allow_version_drift=True)
 
     assert "legend" in result.answers["score.helpfulness"]
     jsonschema.validate(result.to_dict(), SCHEMA)
@@ -420,3 +430,84 @@ def test_missing_input_message_is_the_shared_wording(capsys):
     assert main(["run", "--rubric", "assistant-reply", "--input", "nope.json", "--mock"]) == EXIT_ERROR
     err = capsys.readouterr().err
     assert "cannot read input nope.json: No such file or directory (os error 2)" in err
+
+
+def test_result_records_the_rubric_version_and_the_runtime_that_ran_it():
+    """A verdict is only auditable against the rules and the build that produced it."""
+    result = run_judgment("assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True)
+    rubric = load_rubric("assistant-reply")
+
+    assert result.rubric_version == rubric.version
+    assert result.runtime.name == "python"
+    assert result.runtime.version  # whatever it is, it must not be empty
+
+    data = result.to_dict()
+    assert data["runtime"] == {"name": "python", "version": result.runtime.version}
+
+
+def test_mock_records_the_requested_model_since_nothing_answered():
+    """`model` is the model that answered; under --mock that is the one we asked for."""
+    result = run_judgment("assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True)
+    assert result.model == load_rubric("assistant-reply").model
+
+
+def test_model_records_what_answered_not_what_was_asked_for(monkeypatch):
+    """A live API may resolve an alias; the result must name what actually judged.
+
+    This runtime used to record the requested model and drop `response.model` after
+    logging it, so the same judgment was attributed to two different models
+    depending on which runtime ran it.
+    """
+    from judge_jev import funnel
+
+    class AliasResolvingEngine:
+        def system_one(self, state, questions, model):
+            from judge_jev.models import Usage
+
+            answers = {
+                name: {"type": "noul", "noul": 0.2}
+                for name, spec in load_rubric("assistant-reply").questions.items()
+                if spec["type"] == "noul"
+            }
+            return answers, Usage(1, 2), "req-1", "jev-1.13.0-20260920"
+
+    monkeypatch.setattr(funnel, "get_engine", lambda *_a, **_k: AliasResolvingEngine())
+    result = run_judgment("assistant-reply", FIXTURES / "assistant-reply-pass.json")
+    assert result.model == "jev-1.13.0-20260920"
+
+
+def test_replay_refuses_a_rubric_version_it_was_not_judged_under(tmp_path):
+    """The whole point of replay is re-deriving a verdict; drifted rules cannot."""
+    saved = run_judgment(
+        "assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True
+    ).to_dict()
+    saved["rubric_version"] = "0.0.0-not-the-one-on-disk"
+
+    with pytest.raises(JudgeJevError, match="0.0.0-not-the-one-on-disk"):
+        replay_judgment(saved)
+
+    routed = replay_judgment(saved, allow_version_drift=True)
+    # The result records the version it was ROUTED under, so the reason carries the
+    # original — otherwise the drift would leave no trace at all.
+    assert routed.rubric_version == load_rubric("assistant-reply").version
+    assert "0.0.0-not-the-one-on-disk" in routed.routing_reason
+
+
+def test_replay_drift_is_exit_10_not_a_verdict(tmp_path, capsys):
+    """A refused replay did not judge anything, so it must not look like one."""
+    saved = run_judgment(
+        "assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True
+    ).to_dict()
+    saved["rubric_version"] = "0.0.0-not-the-one-on-disk"
+    path = tmp_path / "saved.json"
+    path.write_text(json.dumps(saved), encoding="utf-8")
+
+    assert main(["replay", "--input", str(path)]) == EXIT_ERROR
+    assert main(["replay", "--input", str(path), "--allow-version-drift"]) == 0
+
+
+def test_version_flag_names_the_runtime(capsys):
+    from judge_jev.models import RUNTIME_VERSION
+
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out.strip() == f"judge-jev {RUNTIME_VERSION} (python)"

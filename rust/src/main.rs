@@ -1,6 +1,6 @@
 use anyhow::Result;
 use judge_jev::funnel::{read_input_text, replay_judgment, run_judgment};
-use judge_jev::models::{JudgmentResult, SavedJudgment};
+use judge_jev::models::{JudgmentResult, SavedJudgment, RUNTIME_NAME, RUNTIME_VERSION};
 use judge_jev::rubric::{list_rubric_ids, show_rubric};
 use judge_jev::{exit_for_verdict, setup, EXIT_ERROR, EXIT_OK, EXIT_USAGE};
 use std::collections::{HashMap, HashSet};
@@ -11,9 +11,10 @@ use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: judge-jev <setup|run|rubric|replay> ...
   setup
-  run    --rubric <id> --input <file.json> [--mock]
-  replay --input <result.json>
-  rubric list | show --id <id>";
+  run    --rubric <id> --input <file.json|-> [--mock]
+  replay --input <result.json|-> [--allow-version-drift]
+  rubric list | show --id <id>
+  --version";
 
 fn main() -> ExitCode {
     // Logs go to stderr so stdout carries nothing but the JudgmentResult JSON and
@@ -45,6 +46,13 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
         return Ok(usage_error("a command is required"));
     };
 
+    // Printing the version is a deliberate, successful exit, so it is answered
+    // before the command match and needs no subcommand.
+    if command == "--version" && args.len() == 1 {
+        println!("judge-jev {RUNTIME_VERSION} ({RUNTIME_NAME})");
+        return Ok(EXIT_OK);
+    }
+
     match command.as_str() {
         "setup" => {
             if let Err(msg) = Flags::parse(&args[1..], &[], &[]) {
@@ -67,7 +75,7 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
             Ok(exit_for_verdict(&result.verdict))
         }
         "replay" => {
-            let flags = match Flags::parse(&args[1..], &["--input"], &[]) {
+            let flags = match Flags::parse(&args[1..], &["--input"], &["--allow-version-drift"]) {
                 Ok(flags) => flags,
                 Err(msg) => return Ok(usage_error(&msg)),
             };
@@ -78,7 +86,7 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
             let text = read_input_text(&PathBuf::from(&input))?;
             let saved: SavedJudgment = serde_json::from_str(&text)
                 .map_err(|e| anyhow::anyhow!("input {input} is not a saved judgment: {e}"))?;
-            let result = replay_judgment(&saved)?;
+            let result = replay_judgment(&saved, flags.is_set("--allow-version-drift"))?;
             print_result(&result)?;
             Ok(exit_for_verdict(&result.verdict))
         }

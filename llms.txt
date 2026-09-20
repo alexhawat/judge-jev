@@ -14,9 +14,9 @@
 ## CLI (both runtimes)
 
 - `judge-jev setup`
-- `judge-jev run --rubric <id> --input <path> [--mock]`
+- `judge-jev run --rubric <id> --input <path|-> [--mock]`
 - `judge-jev rubric list|show --id <id>`
-- `judge-jev replay --input <judgment-result.json>`
+- `judge-jev replay --input <judgment-result.json|-> [--allow-version-drift]`
 
 Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
 

@@ -9,7 +9,7 @@ from typing import Any
 
 from loguru import logger
 
-from judge_jev.models import JudgmentResult, Usage
+from judge_jev.models import RUNTIME_NAME, RUNTIME_VERSION, JudgmentResult, Runtime, Usage
 from judge_jev.paths import repo_root
 from judge_jev.routing import route_verdict
 from judge_jev.rubric import load_rubric
@@ -93,15 +93,16 @@ def run_judgment(
         len(questions),
     )
 
-    answers, usage, request_id = engine.system_one(state, questions, model)
+    answers, usage, request_id, answered_by = engine.system_one(state, questions, model)
     verdict, reason, stage, deciding, confidence = route_verdict(rubric, answers)
 
     result = JudgmentResult(
         rubric_id=rubric.id,
+        rubric_version=rubric.version,
         verdict=verdict,
         confidence=confidence,
         stage=stage,
-        model=model,
+        model=answered_by,
         usage=usage,
         answers=answers,
         routing_reason=reason,
@@ -120,14 +121,44 @@ def run_judgment(
     return result
 
 
-def replay_judgment(saved: dict[str, Any]) -> JudgmentResult:
+def version_drift(saved: dict[str, Any], rubric_version: str) -> str | None:
+    """The message explaining why replaying *saved* would not re-derive its verdict.
+
+    `replay` exists to re-derive a verdict without paying for another call: for an
+    audit, for testing a threshold change, for explaining a past decision. All three
+    break silently if the rules moved underneath the answers, so a mismatch is
+    reported rather than routed. A result carrying no version at all cannot be
+    checked, which is the same failure wearing a different hat.
+    """
+    saved_version = saved.get("rubric_version")
+    if saved_version is None:
+        return (
+            f"saved result carries no rubric_version, so it cannot be shown to have "
+            f"been judged under {saved['rubric_id']} {rubric_version}"
+        )
+    if str(saved_version) != rubric_version:
+        return (
+            f"saved result was judged under {saved['rubric_id']} {saved_version}, "
+            f"but {rubric_version} is on disk"
+        )
+    return None
+
+
+def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False) -> JudgmentResult:
     """Re-route from saved answers without calling TypeSafe."""
     if not isinstance(saved, dict) or "rubric_id" not in saved or "answers" not in saved:
         raise JudgeJevError("Replay input must be a JudgmentResult object with rubric_id and answers")
 
     rubric = load_rubric(saved["rubric_id"])
+    drift = version_drift(saved, rubric.version)
+    if drift is not None and not allow_version_drift:
+        raise JudgeJevError(f"{drift}; re-run with --allow-version-drift to route it anyway")
+
     answers = saved["answers"]
     verdict, reason, stage, deciding, confidence = route_verdict(rubric, answers)
+    # Under drift the result records the version it was ROUTED under, so the reason
+    # is the only place the original version survives. Say it there.
+    prefix = f"replay ({drift})" if drift is not None else "replay"
     usage_data = saved.get("usage", {}) or {}
     usage = Usage(
         input_tokens=usage_data.get("input_tokens"),
@@ -135,15 +166,17 @@ def replay_judgment(saved: dict[str, Any]) -> JudgmentResult:
     )
     return JudgmentResult(
         rubric_id=rubric.id,
+        rubric_version=rubric.version,
         verdict=verdict,
         confidence=confidence,
         stage=stage,
         model=saved.get("model", rubric.model),
         usage=usage,
         answers=answers,
-        routing_reason=f"replay: {reason}",
+        routing_reason=f"{prefix}: {reason}",
         mock=saved.get("mock", False),
         deciding_answers=deciding,
         confidence_floor=rubric.confidence_floor,
         request_id=saved.get("request_id"),
+        runtime=Runtime(RUNTIME_NAME, RUNTIME_VERSION),
     )
