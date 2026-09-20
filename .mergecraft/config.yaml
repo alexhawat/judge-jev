@@ -1,0 +1,78 @@
+models:
+- openai/gpt-terra
+push: restricted
+shell: restricted
+signedCommits: false
+prApproveEnabled: false
+autoMergeEnabled: false
+trust:
+  # trust.agentSandbox decides whether MERGECRAFT_CODEX_SANDBOX=danger-full-access
+  # is honoured. Tiers (tightest first): never | merged-only | dispatch | same-repo.
+  # Fork heads always refuse — no tier lifts that floor.
+  # merged-only gives no working shell during open PR review (head not on default yet).
+  # "On the default branch" only implies reviewed where merging requires review.
+  # same-repo widens override to any non-fork head (including pull_request_target).
+  # Residual risks: a fork PR checked out locally, or adding a collaborator.
+  agentSandbox: 'dispatch'
+  selfReview: 'off'
+providers:
+- label: anthropic
+  harness: claude
+  envIndex: 1
+  authKind: oauth
+- label: bedrock
+  harness: opencode
+  envIndex: 2
+  authKind: cloud_chain
+- label: deepseek
+  harness: opencode
+  envIndex: 3
+  authKind: api_key
+- label: google
+  harness: gemini
+  envIndex: 4
+  authKind: api_key
+- label: minimax
+  harness: opencode
+  envIndex: 5
+  authKind: api_key
+  url: https://api.minimax.io/v1
+- label: moonshotai
+  harness: opencode
+  envIndex: 6
+  authKind: api_key
+- label: nous
+  harness: opencode
+  envIndex: 7
+  authKind: api_key
+  url: https://inference-api.nousresearch.com/v1
+- label: openai
+  harness: codex
+  envIndex: 8
+  authKind: device_code
+- label: opencode
+  harness: opencode
+  envIndex: 9
+  authKind: api_key
+- label: opencode-go
+  harness: opencode
+  envIndex: 10
+  authKind: api_key
+- label: openrouter
+  harness: opencode
+  envIndex: 11
+  authKind: api_key
+- label: tokenhub
+  harness: opencode
+  envIndex: 12
+  authKind: api_key
+  url: https://tokenhub-intl.tencentcloudmaas.com/v1
+- label: vertex
+  harness: opencode
+  envIndex: 13
+  authKind: cloud_chain
+- label: xai
+  harness: opencode
+  envIndex: 14
+  authKind: api_key
+providersSeeded: true

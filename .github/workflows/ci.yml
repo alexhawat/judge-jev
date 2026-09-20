@@ -64,6 +64,29 @@ jobs:
       - name: Runtimes must agree
         run: bash scripts/check-parity.sh
 
+  # The examples are documentation that runs. Mock answers are deterministic, so an
+  # example whose verdict drifts away from what its README claims fails here instead
+  # of misleading the next person who copies it.
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-path: python/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.98
+      - name: Build both runtimes
+        run: |
+          cd python && uv sync --locked --dev && cd ..
+          cd rust && cargo build --release --quiet
+      - name: Examples behave as documented (python)
+        run: JUDGE_JEV_RUNTIME=python bash examples/run-all.sh
+      - name: Examples behave as documented (rust)
+        run: JUDGE_JEV_RUNTIME=rust bash examples/run-all.sh
+
   schemas:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,5 @@
+{
+  "prompt": "My deploy failed with 'ImagePullBackOff'. What should I check first?",
+  "reply": "ImagePullBackOff means the kubelet could not pull the image. Check three things in order: that the image tag exists in the registry, that the pod's imagePullSecrets reference a secret in the same namespace, and that the node can reach the registry host. `kubectl describe pod <name>` shows the exact pull error under Events.",
+  "context": {}
+}

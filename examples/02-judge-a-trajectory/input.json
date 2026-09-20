@@ -1,0 +1,25 @@
+{
+  "goal": "Find every TODO in the repo and write them to todos.txt.",
+  "steps": [
+    { "tool": "grep", "input": "TODO", "output": "src/a.py:12: # TODO retry\nsrc/b.py:40: # TODO drop" },
+    { "tool": "write", "input": "todos.txt", "output": "wrote 2 lines" }
+  ],
+  "final_output": "Found 2 TODOs and wrote them to todos.txt.",
+  "_comment": "Mock scores are derived from a hash of the question name, so a trajectory that must demonstrate `pass` pins them. Live mode ignores this block entirely.",
+  "_mock_answers": {
+    "score.goal_alignment": {
+      "type": "score",
+      "score": 3.7,
+      "confidence": 0.91,
+      "legend": { "0": "Off track", "1": "Minimal progress", "2": "Partial progress", "3": "Mostly complete", "4": "Fully aligned" },
+      "probabilities": { "0": 0.01, "1": 0.02, "2": 0.06, "3": 0.21, "4": 0.7 }
+    },
+    "score.efficiency": {
+      "type": "score",
+      "score": 3.2,
+      "confidence": 0.88,
+      "legend": { "0": "Very wasteful", "1": "Inefficient", "2": "Acceptable", "3": "Efficient", "4": "Optimal" },
+      "probabilities": { "0": 0.01, "1": 0.04, "2": 0.15, "3": 0.5, "4": 0.3 }
+    }
+  }
+}

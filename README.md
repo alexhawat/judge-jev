@@ -16,6 +16,7 @@ cd judge-jev
 bash scripts/setup.sh                    # picks python or rust → .judge-jev/runtime
 export TYPESAFE_API_KEY=...              # optional for live mode
 ./scripts/judge-jev run --rubric assistant-reply --input fixtures/assistant-reply-pass.json --mock
+bash examples/run-all.sh                 # six end-to-end examples, mocked and offline
 ```
 
 ## CLI
@@ -33,6 +34,24 @@ kept clear of the verdict range so a crash can never be read as a verdict of `fa
 JSON goes to stdout, logs to stderr, so `judge-jev run ... | jq` works.
 
 Use `./scripts/judge-jev` from repo root (dispatches via `.judge-jev/runtime`).
+
+## Examples
+
+Six runnable end-to-end examples live in [`examples/`](examples/): a good reply, an
+agent trajectory, gating a pipeline on the exit code, replaying a saved judgment, a
+prompt-injection escalation, and a confidence-floor downgrade.
+
+```bash
+bash examples/run-all.sh                      # all six, checked against expected verdicts
+bash examples/01-judge-a-reply/run.sh         # one, with the result explained
+bash examples/01-judge-a-reply/run.sh --live  # the same example against the real API
+JUDGE_JEV_RUNTIME=rust bash examples/run-all.sh   # and the other runtime agrees
+```
+
+They are mocked by default, so they need no API key and cost nothing. Mock answers
+are canned: a mocked judgment is a test of the wiring, never a safety check.
+[`examples/README.md`](examples/README.md) explains what each one demonstrates and
+how to judge your own input.
 
 ## Funnel
 
@@ -88,6 +107,7 @@ hooks/                   # pre/post + harness snippets
 adapters/                # claude-code, cursor, opencode, codex, openclaw, hermes, grok-bot
 scripts/                 # setup, CLI dispatcher, runtime parity check
 fixtures/                # smoke inputs (fixtures/recorded/ holds real API shapes)
+examples/                # runnable end-to-end examples
 ```
 
 ## Runtimes
