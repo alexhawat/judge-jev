@@ -5,23 +5,25 @@ import type { FunnelNodeData } from './components/FunnelNode';
 
 const elk = new ELK();
 
-const NODE_WIDTH = 168;
-const NODE_HEIGHT = 64;
+const NODE_WIDTH = 248;
+const NODE_HEIGHT = 88;
+const JEV_WIDTH = 272;
 
 export async function layoutFunnel(): Promise<{ nodes: Node<FunnelNodeData>[]; edges: Edge[] }> {
   const graph = {
     id: 'root',
     layoutOptions: {
       'elk.algorithm': 'layered',
-      'elk.direction': 'RIGHT',
-      'elk.spacing.nodeNode': '36',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '56',
+      'elk.direction': 'DOWN',
+      'elk.spacing.nodeNode': '28',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '44',
       'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+      'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
     },
     children: FUNNEL_NODES.map((meta) => ({
       id: meta.id,
-      width: meta.kind === 'jev' ? 200 : NODE_WIDTH,
-      height: meta.subtitle ? NODE_HEIGHT + 12 : NODE_HEIGHT,
+      width: meta.kind === 'jev' ? JEV_WIDTH : NODE_WIDTH,
+      height: meta.subtitle ? NODE_HEIGHT + 16 : NODE_HEIGHT,
     })),
     edges: FUNNEL_EDGES.map((e) => ({
       id: e.id,

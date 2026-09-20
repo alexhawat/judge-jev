@@ -2,7 +2,7 @@ import { memo } from 'react';
 import { Handle, NodeToolbar, Position, type NodeProps } from '@xyflow/react';
 import type { FunnelNodeMeta } from '../funnelData';
 
-export type NodeVisualState = 'idle' | 'hover' | 'selected' | 'playing' | 'dimmed';
+export type NodeVisualState = 'idle' | 'hover' | 'selected' | 'playing' | 'dimmed' | 'batched';
 
 export type FunnelNodeData = {
   meta: FunnelNodeMeta;
@@ -24,6 +24,7 @@ function FunnelNodeComponent({ data, selected }: NodeProps & { data: FunnelNodeD
     visualState === 'hover' ? 'is-hover' : '',
     visualState === 'playing' ? 'is-playing' : '',
     visualState === 'dimmed' ? 'is-dimmed' : '',
+    visualState === 'batched' ? 'is-batched' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -36,10 +37,10 @@ function FunnelNodeComponent({ data, selected }: NodeProps & { data: FunnelNodeD
         <div className="node-tooltip">{tooltip}</div>
       </NodeToolbar>
       <div className={classes} title={tooltip}>
-        <Handle type="target" position={Position.Left} className="funnel-handle" />
+        <Handle type="target" position={Position.Top} className="funnel-handle" />
         <div className="funnel-node-label">{meta.label}</div>
         {meta.subtitle ? <div className="funnel-node-sub">{meta.subtitle}</div> : null}
-        <Handle type="source" position={Position.Right} className="funnel-handle" />
+        <Handle type="source" position={Position.Bottom} className="funnel-handle" />
       </div>
     </>
   );

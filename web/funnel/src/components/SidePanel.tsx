@@ -1,12 +1,12 @@
 import type { FunnelNodeMeta } from '../funnelData';
-import type { PlayScenario } from '../scenarios';
+import type { PlayScenario, PlayStep } from '../scenarios';
 
 export type PanelContext = {
   mode: 'idle' | 'inspect' | 'play';
   scenario?: PlayScenario;
+  currentStep?: PlayStep;
   stepIndex?: number;
   stepTotal?: number;
-  playNote?: string;
 };
 
 type Props = {
@@ -20,16 +20,23 @@ function formatMockAnswer(key: string, answer: PlayScenario['mockAnswers'][strin
     return `${key}: noul ${answer.noul.toFixed(2)} (confidence ≈ ${(Math.abs(answer.noul - 0.5) * 2).toFixed(2)})`;
   }
   if (answer.type === 'choice') {
-    return `${key}: ${answer.choice} (confidence ${answer.confidence?.toFixed(2) ?? '—'})`;
+    return `${answer.choice} · confidence ${answer.confidence?.toFixed(2) ?? '—'}`;
   }
   if (answer.type === 'score') {
-    return `${key}: score ${answer.score?.toFixed(1)} (confidence ${answer.confidence?.toFixed(2) ?? '—'})`;
+    return `score ${answer.score?.toFixed(1)} · confidence ${answer.confidence?.toFixed(2) ?? '—'}`;
   }
   return key;
 }
 
 export default function SidePanel({ node, context, onClose }: Props) {
-  const { scenario, mode, playNote, stepIndex, stepTotal } = context;
+  const { scenario, mode, currentStep, stepIndex, stepTotal } = context;
+
+  const stepAnswers =
+    mode === 'play' && scenario && currentStep?.showAnswers?.length
+      ? currentStep.showAnswers
+          .filter((k) => scenario.mockAnswers[k])
+          .map((k) => [k, scenario.mockAnswers[k]] as const)
+      : [];
 
   return (
     <aside className={`side-panel ${node || mode === 'play' ? 'is-open' : ''}`} aria-live="polite">
@@ -50,16 +57,30 @@ export default function SidePanel({ node, context, onClose }: Props) {
               Step {stepIndex + 1} of {stepTotal}
             </div>
           ) : null}
-          <p className="play-summary">{scenario.summary}</p>
-          {playNote ? <p className="play-note">{playNote}</p> : null}
+          {currentStep ? (
+            <p className="play-step-note">{currentStep.stepNote}</p>
+          ) : (
+            <p className="play-summary">{scenario.summary}</p>
+          )}
+          {stepAnswers.length > 0 ? (
+            <div className="play-answers-now">
+              {stepAnswers.map(([k, v]) => (
+                <div key={k} className="play-answer-row">
+                  <span className="play-answer-key">{k}</span>
+                  <span className="play-answer-val">{formatMockAnswer(k, v)}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="play-verdict-chip" data-verdict={scenario.verdict}>
-            → {scenario.verdict}
+            target → {scenario.verdict}
             {scenario.confidence > 0 ? ` · confidence ${scenario.confidence.toFixed(2)}` : ''}
           </div>
           {scenario.decidingAnswers.length > 0 ? (
-            <p className="play-deciding">
-              deciding: {scenario.decidingAnswers.join(', ')}
-            </p>
+            <p className="play-deciding">deciding_answers: {scenario.decidingAnswers.join(', ')}</p>
+          ) : null}
+          {currentStep?.nodeId === scenario.verdictNodeId ? (
+            <p className="play-routing-reason">{scenario.routingReason}</p>
           ) : null}
         </div>
       ) : null}
@@ -75,46 +96,15 @@ export default function SidePanel({ node, context, onClose }: Props) {
               ))}
             </ul>
           ) : null}
-          {mode === 'play' && scenario && relevantMocks(node, scenario).length > 0 ? (
-            <div className="side-panel-mocks">
-              <h3>Fixture answers at this stage</h3>
-              <ul>
-                {relevantMocks(node, scenario).map(([k, v]) => (
-                  <li key={k}>
-                    <code>{formatMockAnswer(k, v)}</code>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
           {node.codeRef ? <p className="side-panel-ref">Code: {node.codeRef}</p> : null}
         </div>
       ) : (
         <div className="side-panel-body side-panel-hint">
           <p>Hover or click nodes to highlight the path from Input. Edge labels show real assistant-reply routing snippets.</p>
-          <p>Pick a fixture and press <strong>Play</strong> to animate a sample judgment end-to-end.</p>
+          <p>Pick a fixture and press <strong>Play</strong> — each scenario follows its own deciding path.</p>
           <p>Press <kbd>Esc</kbd> to clear selection and path highlight.</p>
         </div>
       )}
     </aside>
-  );
-}
-
-const STAGE_ANSWERS: Record<string, string[]> = {
-  screen: ['screen.judgeable', 'screen.injection'],
-  profile: ['profile.intent'],
-  locate: ['locate.hallucination_risk', 'locate.harmful'],
-  score: ['score.helpfulness', 'score.coherence'],
-  'route-q': ['route.escalate'],
-  route: [],
-  'confidence-floor': [],
-};
-
-function relevantMocks(node: FunnelNodeMeta, scenario: PlayScenario) {
-  const keys = STAGE_ANSWERS[node.id] ?? Object.keys(scenario.mockAnswers);
-  return Object.entries(scenario.mockAnswers).filter(([k]) =>
-    node.id === 'answers' || node.id === 'route' || node.id === 'confidence-floor'
-      ? true
-      : keys.includes(k),
   );
 }

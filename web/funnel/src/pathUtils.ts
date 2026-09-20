@@ -6,17 +6,14 @@ const INPUT_ID = 'input';
 
 function adjacency(edges: EdgeDef[]) {
   const forward = new Map<string, string[]>();
-  const backward = new Map<string, string[]>();
   for (const e of edges) {
     if (!forward.has(e.source)) forward.set(e.source, []);
-    if (!backward.has(e.target)) backward.set(e.target, []);
     forward.get(e.source)!.push(e.target);
-    backward.get(e.target)!.push(e.source);
   }
-  return { forward, backward };
+  return { forward };
 }
 
-/** Shortest path from `from` to `to` (BFS). */
+/** Shortest forward path from `from` to `to` (BFS). */
 export function shortestPath(from: string, to: string, edges: EdgeDef[] = FUNNEL_EDGES): string[] {
   if (from === to) return [from];
   const { forward } = adjacency(edges);
@@ -47,7 +44,6 @@ export function edgeKey(source: string, target: string) {
   return `${source}->${target}`;
 }
 
-/** Path edges along a node sequence. */
 export function pathEdges(nodePath: string[], edges: EdgeDef[] = FUNNEL_EDGES): Set<string> {
   const ids = new Set<string>();
   for (let i = 0; i < nodePath.length - 1; i += 1) {
@@ -75,10 +71,44 @@ export interface HighlightResult {
   path: string[];
 }
 
-/**
- * Ancestor path from Input to focus, plus focus neighbors.
- * If focus is a verdict, extend to JudgmentResult when reachable.
- */
+const QUESTION_STAGES = new Set(['screen', 'profile', 'locate', 'score', 'route-q']);
+
+/** Cumulative scenario deciding path for play mode — no shortest-path drift through unrelated branches. */
+export function computePlayHighlight(
+  decidingPath: string[],
+  pathEndIndex: number,
+  edgeList: EdgeDef[] = FUNNEL_EDGES,
+): HighlightResult {
+  if (!decidingPath.length || pathEndIndex < 0) {
+    return { nodes: new Set(), edgeIds: new Set(), path: [] };
+  }
+
+  const path = decidingPath.slice(0, pathEndIndex + 1);
+  const nodes = new Set<string>(path);
+  const edgeIds = new Set<string>();
+
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const a = path[i];
+    const b = path[i + 1];
+    const direct = edgeList.find((e) => e.source === a && e.target === b);
+    if (direct) edgeIds.add(direct.id ?? edgeKey(a, b));
+  }
+
+  const hasAnswers = path.includes('answers');
+  for (const stage of path) {
+    if (!QUESTION_STAGES.has(stage)) continue;
+    const fromJev = edgeList.find((e) => e.source === 'jev-call' && e.target === stage);
+    if (fromJev) edgeIds.add(fromJev.id ?? edgeKey('jev-call', stage));
+    if (hasAnswers) {
+      const toAns = edgeList.find((e) => e.source === stage && e.target === 'answers');
+      if (toAns) edgeIds.add(toAns.id ?? edgeKey(stage, 'answers'));
+    }
+  }
+
+  return { nodes, edgeIds, path };
+}
+
+/** Hover/inspect: ancestor path from Input plus neighbors. */
 export function computeHighlight(
   focusId: string | null,
   edgeList: EdgeDef[] = FUNNEL_EDGES,

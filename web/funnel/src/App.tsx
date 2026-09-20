@@ -12,24 +12,34 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
+import FitViewHelper from './components/FitViewHelper';
 import FunnelNode, { type FunnelNodeData, type NodeVisualState } from './components/FunnelNode';
 import FunnelEdge from './components/FunnelEdge';
 import SidePanel, { type PanelContext } from './components/SidePanel';
 import Toolbar from './components/Toolbar';
 import { FUNNEL_EDGES, NODE_BY_ID } from './funnelData';
-import { computeHighlight } from './pathUtils';
-import { DEFAULT_SCENARIO_ID, SCENARIO_BY_ID } from './scenarios';
+import { computeHighlight, computePlayHighlight } from './pathUtils';
+import { DEFAULT_SCENARIO_ID, SCENARIO_BY_ID, type PlayScenario } from './scenarios';
 import { layoutFunnel } from './layoutElk';
 
 const nodeTypes = { funnel: FunnelNode };
 const edgeTypes = { funnel: FunnelEdge };
 
-const STEP_MS = 900;
-const LABEL_ZOOM_MIN = 0.42;
+const LABEL_ZOOM_MIN = 0.5;
 
 function readNodeFromUrl(): string | null {
   const id = new URLSearchParams(window.location.search).get('node');
   return id && NODE_BY_ID[id] ? id : null;
+}
+
+function playPathIndex(scenario: PlayScenario, stepIndex: number): number {
+  const visited = scenario.steps.slice(0, stepIndex + 1).map((s) => s.nodeId);
+  let maxIdx = 0;
+  for (const id of visited) {
+    const idx = scenario.decidingPath.indexOf(id);
+    if (idx > maxIdx) maxIdx = idx;
+  }
+  return maxIdx;
 }
 
 function FunnelDiagram({
@@ -39,10 +49,12 @@ function FunnelDiagram({
   hoverId,
   selectedId,
   playing,
+  playHighlight,
   hideLabels,
   onHover,
   onSelectionChange,
   onZoom,
+  ready,
 }: {
   baseNodes: Node<FunnelNodeData>[];
   baseEdges: Edge[];
@@ -50,13 +62,15 @@ function FunnelDiagram({
   hoverId: string | null;
   selectedId: string | null;
   playing: boolean;
+  playHighlight: ReturnType<typeof computePlayHighlight> | null;
   hideLabels: boolean;
   onHover: (id: string | null) => void;
   onSelectionChange: (params: OnSelectionChangeParams) => void;
   onZoom: (zoom: number) => void;
+  ready: boolean;
 }) {
-  const highlight = useMemo(() => computeHighlight(focusId, FUNNEL_EDGES), [focusId]);
-  const hasFocus = Boolean(focusId);
+  const highlight = playHighlight ?? computeHighlight(focusId, FUNNEL_EDGES);
+  const hasFocus = Boolean(focusId || playHighlight);
 
   const nodes = useMemo(() => {
     return baseNodes.map((n) => {
@@ -99,12 +113,11 @@ function FunnelDiagram({
       onNodeMouseLeave={() => onHover(null)}
       onPaneClick={() => onHover(null)}
       onMove={onMove}
-      fitView
-      fitViewOptions={{ padding: 0.18 }}
-      minZoom={0.25}
+      minZoom={0.55}
       maxZoom={1.6}
       proOptions={{ hideAttribution: true }}
     >
+      <FitViewHelper ready={ready} />
       <Background gap={20} color="#2a3344" />
       <Controls showInteractive={false} />
       <MiniMap
@@ -137,6 +150,7 @@ function AppInner() {
   const timerRef = useRef<number | null>(null);
   const scenario = SCENARIO_BY_ID[scenarioId];
   const hideLabels = zoom < LABEL_ZOOM_MIN;
+  const currentStep = scenario?.steps[stepIndex];
 
   useEffect(() => {
     layoutFunnel().then(({ nodes, edges }) => {
@@ -156,7 +170,7 @@ function AppInner() {
 
   const clearPlayTimer = useCallback(() => {
     if (timerRef.current != null) {
-      window.clearInterval(timerRef.current);
+      window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
   }, []);
@@ -168,16 +182,12 @@ function AppInner() {
     setStepIndex(0);
   }, [clearPlayTimer]);
 
-  const focusId = playing || paused ? scenario?.steps[stepIndex] ?? null : hoverId ?? selectedId;
+  const focusId =
+    playing || paused ? currentStep?.nodeId ?? null : hoverId ?? selectedId;
 
-  const playNote = useMemo(() => {
-    if (!scenario || (!playing && !paused)) return undefined;
-    const nodeId = scenario.steps[stepIndex];
-    if (nodeId === scenario.verdictNodeId) return scenario.routingReason;
-    if (nodeId === 'confidence-floor' && scenario.verdict === 'review') {
-      return 'Automatic pass/fail below confidence_floors[stakes] → review';
-    }
-    return undefined;
+  const playHighlight = useMemo(() => {
+    if (!scenario || (!playing && !paused)) return null;
+    return computePlayHighlight(scenario.decidingPath, playPathIndex(scenario, stepIndex));
   }, [scenario, playing, paused, stepIndex]);
 
   const panelContext: PanelContext = useMemo(() => {
@@ -185,14 +195,14 @@ function AppInner() {
       return {
         mode: 'play',
         scenario,
+        currentStep,
         stepIndex,
         stepTotal: scenario?.steps.length,
-        playNote,
       };
     }
     if (selectedId || hoverId) return { mode: 'inspect' };
     return { mode: 'idle' };
-  }, [playing, paused, scenario, stepIndex, playNote, selectedId, hoverId]);
+  }, [playing, paused, scenario, currentStep, stepIndex, selectedId, hoverId]);
 
   const panelNode = focusId ? NODE_BY_ID[focusId] ?? null : null;
 
@@ -200,36 +210,35 @@ function AppInner() {
     setStepIndex((prev) => {
       const steps = SCENARIO_BY_ID[scenarioId]?.steps ?? [];
       if (prev >= steps.length - 1) {
-        clearPlayTimer();
         setPlaying(false);
         setPaused(false);
         return prev;
       }
       return prev + 1;
     });
-  }, [scenarioId, clearPlayTimer]);
+  }, [scenarioId]);
 
   const startPlay = useCallback(() => {
     setStepIndex(0);
     setPlaying(true);
     setPaused(false);
-    setSelectedId(scenario?.steps[0] ?? null);
+    setSelectedId(scenario?.steps[0]?.nodeId ?? null);
   }, [scenario]);
 
   useEffect(() => {
-    if (!playing || paused) {
+    if (!playing || paused || !currentStep) {
       clearPlayTimer();
       return;
     }
-    timerRef.current = window.setInterval(advanceStep, STEP_MS);
+    timerRef.current = window.setTimeout(advanceStep, currentStep.dwellMs);
     return clearPlayTimer;
-  }, [playing, paused, advanceStep, clearPlayTimer]);
+  }, [playing, paused, stepIndex, currentStep, advanceStep, clearPlayTimer]);
 
   useEffect(() => {
-    if ((playing || paused) && scenario) {
-      setSelectedId(scenario.steps[stepIndex] ?? null);
+    if ((playing || paused) && currentStep) {
+      setSelectedId(currentStep.nodeId);
     }
-  }, [stepIndex, playing, paused, scenario]);
+  }, [stepIndex, playing, paused, currentStep]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -300,7 +309,9 @@ function AppInner() {
               hoverId={hoverId}
               selectedId={selectedId}
               playing={playing && !paused}
+              playHighlight={playHighlight}
               hideLabels={hideLabels}
+              ready={ready}
               onHover={(id) => {
                 if (!playing || paused) setHoverId(id);
               }}
