@@ -39,6 +39,8 @@ export TYPESAFE_API_KEY="your-key"
 ```
 
 CI and local smoke tests should use `--mock` (no network, deterministic answers).
+A mocked judgment must never be reported as a real one -- mock answers are canned,
+so they prove the wiring works and nothing about the content.
 
 Both runtimes pin model **`jev-1.13.0`** from shared rubrics and log model + token usage.
 

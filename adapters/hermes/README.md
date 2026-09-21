@@ -11,10 +11,21 @@ Hermes agents: install the skill at `skills/judge-jev/SKILL.md` and delegate jud
   "parameters": {
     "rubric": { "type": "string" },
     "input_path": { "type": "string" },
-    "mock": { "type": "boolean", "default": true }
+    "mock": { "type": "boolean", "default": false }
   },
   "command": "./scripts/judge-jev run --rubric {rubric} --input {input_path} {mock_flag}"
 }
 ```
 
-Implement `{mock_flag}` as `--mock` when true, empty otherwise.
+`mock` defaults to `false` so the manifest judges for real; it requires
+`TYPESAFE_API_KEY` in the agent's environment. Implement `{mock_flag}` as `--mock`
+only when the caller explicitly asks to smoke-test the wiring, empty otherwise --
+mock answers are canned and must never be reported as a real judgment.
+
+`input_path` accepts `-` to read the state from stdin, so Hermes can pipe the JSON
+it already holds instead of writing a temp file.
+
+## Windows
+
+Point the manifest's `command` at `pwsh scripts/judge-jev.ps1` in place of
+`./scripts/judge-jev` when the Hermes host runs on Windows.
