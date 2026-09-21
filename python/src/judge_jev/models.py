@@ -36,6 +36,10 @@ class RubricError(ValueError):
     """A rubric is malformed. Raised at load time, never at judgment time."""
 
 
+class JudgeJevError(RuntimeError):
+    """An operational failure: bad input, bad config, or an API problem."""
+
+
 @dataclass
 class Runtime:
     """Which build produced a result.
@@ -125,7 +129,7 @@ class Rubric:
     model: str
     stakes: str
     confidence_floors: dict[str, float]
-    state_filter: list[str]
+    state_filter: list[Any]
     questions: dict[str, dict[str, Any]]
     rules: tuple[RoutingRule, ...] = ()
 

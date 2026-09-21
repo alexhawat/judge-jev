@@ -197,6 +197,48 @@ pub fn is_text_field(field: &str) -> bool {
 
 pub const OPS: [&str; 6] = ["<", "<=", ">", ">=", "==", "!="];
 
+/// One `state_filter` entry: a path, and whether its absence is fatal.
+///
+/// Written either as a bare path or as `{ path: …, required: true }`. The mapping
+/// form was chosen over a sigil (`ticket.subject!`) because it reads as data rather
+/// than punctuation and matches the inline-mapping style the routing rules already
+/// use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatePath {
+    pub path: String,
+    pub required: bool,
+}
+
+impl<'de> Deserialize<'de> for StatePath {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Full {
+            path: String,
+            #[serde(default)]
+            required: bool,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Spec {
+            Bare(String),
+            Full(Full),
+        }
+
+        Ok(match Spec::deserialize(deserializer)? {
+            Spec::Bare(path) => StatePath {
+                path,
+                required: false,
+            },
+            Spec::Full(full) => StatePath {
+                path: full.path,
+                required: full.required,
+            },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Rubric {
     pub id: String,
@@ -208,7 +250,7 @@ pub struct Rubric {
     #[serde(default)]
     pub confidence_floors: HashMap<String, f64>,
     #[serde(default)]
-    pub state_filter: Vec<String>,
+    pub state_filter: Vec<StatePath>,
     pub questions: HashMap<String, QuestionSpec>,
     pub routing: RoutingSpec,
 }

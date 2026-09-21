@@ -2,6 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/alexhawat/judge-jev/shared/schemas/rubric.schema.json",
   "title": "Rubric",
+  "$defs": {
+    "statePath": {
+      "type": "string",
+      "description": "Dot-separated segments; each is a key, optionally followed by `[]` to map over a list.",
+      "pattern": "^[^.\\[\\]]+(\\[\\])?(\\.[^.\\[\\]]+(\\[\\])?)*$"
+    }
+  },
   "type": "object",
   "required": ["id", "version", "model", "stakes", "confidence_floors", "questions", "routing"],
   "properties": {
@@ -21,8 +28,24 @@
     },
     "state_filter": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Top-level keys to include when building TypeSafe state"
+      "description": "Paths to include when building TypeSafe state. `a` selects a top-level key, `a.b` a nested key, `a[]` maps over a list and `a[].b` projects a field from each of its elements; the filtered state keeps the original shape, so a path written in `instructions` still resolves. An entry is a path, or a mapping that also marks it required: a path that does not resolve is dropped with a warning unless `required` is true, which fails the run instead. In an inline mapping the path must be quoted, since `[` and `]` are YAML flow indicators.",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/statePath" },
+          {
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "$ref": "#/$defs/statePath" },
+              "required": {
+                "type": "boolean",
+                "description": "Fail the run when this path is absent, instead of warning and dropping it."
+              }
+            }
+          }
+        ]
+      }
     },
     "questions": {
       "type": "object",

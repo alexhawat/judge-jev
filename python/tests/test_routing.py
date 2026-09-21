@@ -291,8 +291,12 @@ def test_mock_answers_block_never_reaches_the_model(monkeypatch):
 
     monkeypatch.setattr(typesafe_client.MockEngine, "system_one", spy)
     run_judgment("assistant-reply", FIXTURES / "assistant-reply-fail.json", mock=True)
-    assert "_mock_answers" not in seen["state"]
-    assert "_comment" not in seen["state"]
+    assert "_mock_answers" not in seen["state"].value
+    assert "_comment" not in seen["state"].value
+    # And not in the bytes a live call would have sent, which is the claim that
+    # actually matters now that the request is built from exactly those bytes.
+    assert "_mock_answers" not in seen["state"].text
+    assert "_comment" not in seen["state"].text
 
 
 # --- replay --------------------------------------------------------------------

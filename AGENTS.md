@@ -76,7 +76,12 @@ not happen (operational error / usage) and must not be read as a verdict.
 
 ## 6. Judge real artifacts
 
-Build input JSON matching rubric `state_filter` keys:
+Build input JSON matching rubric `state_filter` paths. An entry is a path, not
+only a top-level key: `a.b` selects a nested key, `a[]` maps over a list, `a[].b`
+projects a field from each element, and `{ path: "a[].b", required: true }` fails the
+run with exit `10` when it does not resolve instead of warning. The filtered state
+keeps the original shape, so paths in `instructions` still resolve.
+
 
 - **assistant-reply**: `prompt`, `reply`, optional `context`
 - **agent-trajectory**: `goal`, `steps`, `final_output`

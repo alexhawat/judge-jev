@@ -1,9 +1,13 @@
+pub mod budget;
+pub mod canonical;
 pub mod funnel;
 pub mod models;
 pub mod paths;
+pub mod retry;
 pub mod routing;
 pub mod rubric;
 pub mod setup;
+pub mod state_filter;
 pub mod typesafe;
 
 // Verdict codes. These are a contract: hooks and CI branch on them.

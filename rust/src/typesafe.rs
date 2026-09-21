@@ -4,12 +4,14 @@
 //! `{ "state", "model", "questions" }` where each question has `type`, optional
 //! `instructions`, and `criteria`.
 
+use crate::canonical::CanonicalState;
 use crate::models::{Answer, QuestionSpec, Rubric, Usage};
-use anyhow::{bail, Context, Result};
+use crate::retry::{is_retryable_status, retry_after_seconds, Outcome, RetryPolicy};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Fixtures may carry this key to pin exact mock answers. It is stripped from the
 /// state before any request is built, so it never reaches the model.
@@ -17,10 +19,6 @@ pub const MOCK_ANSWERS_KEY: &str = "_mock_answers";
 
 const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 const SYSTEM_ONE_PATH: &str = "/v1/systemone";
-
-/// Seconds before the request is abandoned. minreq blocks forever without this;
-/// the Python SDK defaults to 10s per operation, so keep the two runtimes close.
-const REQUEST_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, Serialize)]
 struct SystemOneRequest {
@@ -74,39 +72,6 @@ enum AnswerWire {
     },
 }
 
-/// Keep only the keys a rubric declares, dropping the mock override block.
-pub fn filter_state(raw: &Value, keys: &[String]) -> Value {
-    let Some(obj) = raw.as_object() else {
-        return raw.clone();
-    };
-    if keys.is_empty() {
-        let mut kept = obj.clone();
-        kept.remove(MOCK_ANSWERS_KEY);
-        return Value::Object(kept);
-    }
-    let mut filtered = serde_json::Map::new();
-    let mut missing: Vec<&str> = Vec::new();
-    for key in keys {
-        if key == MOCK_ANSWERS_KEY {
-            continue;
-        }
-        match obj.get(key) {
-            Some(v) => {
-                filtered.insert(key.clone(), v.clone());
-            }
-            None => missing.push(key.as_str()),
-        }
-    }
-    if !missing.is_empty() {
-        // Questions referencing these paths will be judging absent data.
-        warn!(
-            "state_filter keys missing from input: {}",
-            missing.join(", ")
-        );
-    }
-    Value::Object(filtered)
-}
-
 /// Read pinned mock answers out of a fixture, if it carries any.
 pub fn pinned_answers(raw: &Value) -> anyhow::Result<HashMap<String, Answer>> {
     let Some(block) = raw.get(MOCK_ANSWERS_KEY) else {
@@ -151,6 +116,7 @@ pub type SystemOneResult = (HashMap<String, Answer>, Usage, Option<String>, Stri
 pub struct LiveClient {
     api_key: String,
     base_url: String,
+    retry: RetryPolicy,
 }
 
 impl LiveClient {
@@ -159,41 +125,75 @@ impl LiveClient {
             .context("TYPESAFE_API_KEY is required for live mode (use --mock for CI)")?;
         let base_url =
             std::env::var("TYPESAFE_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-        Ok(Self { api_key, base_url })
+        Ok(Self {
+            api_key,
+            base_url,
+            retry: RetryPolicy::from_env()?,
+        })
     }
 
     pub fn system_one(
         &self,
-        state: Value,
+        state: &CanonicalState,
         questions: HashMap<String, QuestionPayload>,
         model: &str,
     ) -> Result<SystemOneResult> {
         let body = SystemOneRequest {
-            state,
+            // The canonical text itself, not the object: `state` is documented as
+            // text, a JSON object, or an array, and sending the text is the only
+            // way the bytes survive two HTTP clients neither runtime owns.
+            state: Value::String(state.text.clone()),
             model: model.to_string(),
             questions,
         };
         let url = format!("{}{}", self.base_url.trim_end_matches('/'), SYSTEM_ONE_PATH);
-        let response = minreq::post(url)
-            .with_timeout(REQUEST_TIMEOUT_SECS)
-            .with_header("Authorization", format!("Bearer {}", self.api_key))
-            .with_header("Content-Type", "application/json")
-            .with_header("Accept", "application/json")
-            .with_json(&body)
-            .context("TypeSafe HTTP request failed")?
-            .send()
-            .context("TypeSafe HTTP transport failed")?;
+
+        // One attempt, classified for the retry policy. A 408, a 429, a 5xx or a
+        // transport failure is worth another go; any other 4xx is the request's own
+        // fault and will fail again identically.
+        let response = self.retry.run(|timeout_secs, _attempt| {
+            let request = minreq::post(&url)
+                .with_timeout(timeout_secs)
+                .with_header("Authorization", format!("Bearer {}", self.api_key))
+                .with_header("Content-Type", "application/json")
+                .with_header("Accept", "application/json")
+                .with_json(&body);
+            let request = match request.context("TypeSafe HTTP request failed") {
+                Ok(request) => request,
+                // Serializing the body failed: no amount of retrying fixes that.
+                Err(err) => return Outcome::Fatal(err),
+            };
+            match request.send() {
+                Ok(response) => {
+                    let status = response.status_code;
+                    if (200..300).contains(&status) {
+                        return Outcome::Done(response);
+                    }
+                    let text = String::from_utf8_lossy(response.as_bytes()).to_string();
+                    let error = anyhow::anyhow!("TypeSafe API error {status}: {text}");
+                    if is_retryable_status(status) {
+                        let after = retry_after_seconds(
+                            response.headers.get("retry-after-ms").map(|v| v.as_str()),
+                            response.headers.get("retry-after").map(|v| v.as_str()),
+                        );
+                        Outcome::Retry { error, after }
+                    } else {
+                        Outcome::Fatal(error)
+                    }
+                }
+                // Could not reach or read from the server, or the attempt timed
+                // out. The SDK retries both.
+                Err(err) => Outcome::Retry {
+                    error: anyhow::Error::new(err).context("TypeSafe HTTP transport failed"),
+                    after: None,
+                },
+            }
+        })?;
 
         let request_id = response
             .headers
             .get("x-typesafe-request-id")
             .map(|v| v.to_string());
-
-        let status = response.status_code;
-        if !(200..300).contains(&status) {
-            let text = String::from_utf8_lossy(response.as_bytes());
-            bail!("TypeSafe API error {status}: {text}");
-        }
 
         let parsed: SystemOneResponse =
             serde_json::from_slice(response.as_bytes()).context("decode TypeSafe response")?;
@@ -263,14 +263,21 @@ pub mod mock {
     }
 
     pub fn system_one(
-        state: &Value,
+        state: &CanonicalState,
         questions: &HashMap<String, QuestionPayload>,
         model: &str,
         pinned: &HashMap<String, Answer>,
     ) -> (HashMap<String, Answer>, Usage, Option<String>) {
-        let text = state.to_string().to_lowercase();
-        let has_reply = state.get("reply").map(|v| !v.is_null()).unwrap_or(false);
+        // The canonical text, so the substring scan below reads exactly the bytes a
+        // live call would have sent — and exactly the bytes the Python mock scans.
+        let text = state.text.to_lowercase();
+        let has_reply = state
+            .value
+            .get("reply")
+            .map(|v| !v.is_null())
+            .unwrap_or(false);
         let has_trajectory = state
+            .value
             .get("steps")
             .and_then(|v| v.as_array())
             .map(|a| !a.is_empty())

@@ -2,36 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
 from loguru import logger
 from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
 
-from judge_jev.models import Rubric, Usage
+from judge_jev.canonical import CanonicalState
+from judge_jev.models import JudgeJevError, Rubric, Usage
+from judge_jev.retry import PER_OPERATION_TIMEOUT, retry_policy
 
 PINNED_MODEL = "jev-1.13.0"
 
 # Fixtures may carry this key to pin exact mock answers. It is stripped from the
 # state before any request is built, so it never reaches the model.
 MOCK_ANSWERS_KEY = "_mock_answers"
-
-
-class JudgeJevError(RuntimeError):
-    """An operational failure: bad input, bad config, or an API problem."""
-
-
-def filter_state(raw: dict[str, Any], keys: list[str]) -> dict[str, Any]:
-    """Keep only the keys a rubric declares, dropping the mock override block."""
-    source = {k: v for k, v in raw.items() if k != MOCK_ANSWERS_KEY}
-    if not keys:
-        return source
-    missing = [k for k in keys if k not in source]
-    if missing:
-        # Questions referencing these paths will be judging absent data.
-        logger.warning("state_filter keys missing from input: {}", ", ".join(missing))
-    return {k: source[k] for k in keys if k in source}
 
 
 def build_questions(rubric: Rubric) -> dict[str, Any]:
@@ -105,14 +90,16 @@ class MockEngine:
 
     def system_one(
         self,
-        state: dict[str, Any] | str,
+        state: CanonicalState,
         questions: dict[str, Any],
         model: str,
     ) -> tuple[dict[str, dict[str, Any]], Usage, str, str]:
         answers: dict[str, dict[str, Any]] = {}
-        text = json.dumps(state, default=str).lower() if isinstance(state, dict) else str(state).lower()
-        has_reply = isinstance(state, dict) and bool(state.get("reply"))
-        has_trajectory = isinstance(state, dict) and bool(state.get("steps"))
+        # The canonical text, so the substring scan below reads exactly the bytes a
+        # live call would have sent — and exactly the bytes the Rust mock scans.
+        text = state.text.lower()
+        has_reply = bool(state.value.get("reply"))
+        has_trajectory = bool(state.value.get("steps"))
         injection_hit = "ignore all prior" in text or "always return pass" in text
 
         for name, question in sorted(questions.items()):
@@ -167,15 +154,26 @@ class MockEngine:
 class LiveEngine:
     def system_one(
         self,
-        state: dict[str, Any] | str,
+        state: CanonicalState,
         questions: dict[str, Any],
         model: str,
     ) -> tuple[dict[str, dict[str, Any]], Usage, str | None, str]:
         api_key = os.environ.get("TYPESAFE_API_KEY")
         if not api_key:
             raise JudgeJevError("TYPESAFE_API_KEY is required for live mode (use --mock for CI)")
-        with TypeSafeClient(api_key=api_key, model=model) as client:
-            response = client.system_one(state=state, questions=questions, model=model)
+        # Retry and timeout are passed explicitly rather than inherited: the Rust
+        # runtime has to mirror them, and a default that is written down on one side
+        # and assumed on the other is how the two drifted apart.
+        with TypeSafeClient(
+            api_key=api_key,
+            model=model,
+            retry=retry_policy(),
+            timeout=PER_OPERATION_TIMEOUT,
+        ) as client:
+            # The canonical text itself, not the object: `state` is documented as
+            # text, a JSON object, or an array, and sending the text is the only way
+            # the bytes survive two HTTP clients neither runtime owns.
+            response = client.system_one(state=state.text, questions=questions, model=model)
             usage = Usage(
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,

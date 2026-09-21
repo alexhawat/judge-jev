@@ -36,7 +36,10 @@ Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
 
 - Fan-out all rubric questions in one TypeSafe `system_one` call; route in code.
 - Pin model `jev-1.13.0`; log model + usage every call.
-- Filter state to rubric `state_filter` before API calls.
+- Filter state to rubric `state_filter` paths before API calls (`a.b`, `a[]`, `a[].b`; `{path, required}` to fail on a missing one).
+- Requests are built from one canonical serialization (`canonical.py` / `canonical.rs`): keys sorted at every depth, compact
+  separators, `state` sent as that text. Both runtimes must produce identical
+  bytes; `scripts/check-parity.sh` asserts it.
 - Confidence floors depend on stakes (read_only ~0.5, destructive ~0.85).
 - Noul 0.5 means uncertain, not “medium”.
 - Arithmetic/threshold enforcement stays in code, not in Jev prompts.
