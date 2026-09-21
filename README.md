@@ -19,6 +19,10 @@ export TYPESAFE_API_KEY=...              # optional for live mode
 bash examples/run-all.sh                 # six end-to-end examples, mocked and offline
 ```
 
+On Windows, use `pwsh scripts/setup.ps1` and `pwsh scripts/judge-jev.ps1` in place
+of the bash scripts above — same runtime selection, same argument contract, same
+exit codes.
+
 ## CLI
 
 | Command | Description |
@@ -40,6 +44,7 @@ A malformed command line is `11` in both runtimes, with the same message — nev
 writing a temp file, and `run | replay` composes.
 
 Use `./scripts/judge-jev` from repo root (dispatches via `.judge-jev/runtime`).
+On Windows, use `pwsh scripts/judge-jev.ps1` — same args, same exit codes.
 
 ## Examples
 
