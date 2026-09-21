@@ -1,0 +1,67 @@
+# PowerShell mirror of scripts/judge-jev (bash). Keep the two in lockstep: same
+# runtime resolution, same dispatch, same exit-code contract.
+#
+# PowerShell does not propagate a native command's exit code as its own by default,
+# and $LASTEXITCODE is not read automatically -- the whole point of this CLI is its
+# exit codes (0 pass .. 4 skip, 10/11 not a verdict), so every branch below reads
+# $LASTEXITCODE explicitly and exits with it. A `fail` verdict has to come back as
+# exit 1, not a silently-swallowed 0.
+$ErrorActionPreference = "Stop"
+
+# Write-Error raises a terminating error, and with $ErrorActionPreference = "Stop"
+# that unwinds the script immediately -- the `exit <code>` line right after it would
+# never run, so the exit code we are trying to forward gets replaced by whatever
+# exit code an uncaught PowerShell error happens to produce. Writing straight to
+# stderr keeps the explicit `exit` in control, the same way bash's `echo ... >&2`
+# does not itself end the script.
+function Write-ErrLine([string]$Message) {
+    [Console]::Error.WriteLine($Message)
+}
+
+$Root = Split-Path -Parent $PSScriptRoot
+$env:JUDGE_JEV_ROOT = $Root
+$RuntimeFile = Join-Path $Root ".judge-jev/runtime"
+
+if (Test-Path $RuntimeFile) {
+    $Runtime = (Get-Content -Raw $RuntimeFile).Trim()
+} elseif ($env:JUDGE_JEV_RUNTIME) {
+    $Runtime = $env:JUDGE_JEV_RUNTIME
+} else {
+    $Runtime = "python"
+}
+
+Set-Location $Root
+
+switch ($Runtime) {
+    "python" {
+        uv run --directory (Join-Path $Root "python") judge-jev @args
+        exit $LASTEXITCODE
+    }
+    "rust" {
+        # cargo's own binary name has no extension on Linux/macOS (including
+        # pwsh there) and `.exe` on Windows; check both so this script works
+        # wherever pwsh does.
+        $BinExe = Join-Path $Root "rust/target/release/judge-jev.exe"
+        $BinPlain = Join-Path $Root "rust/target/release/judge-jev"
+        $Bin = if (Test-Path $BinExe) { $BinExe } elseif (Test-Path $BinPlain) { $BinPlain } else { $null }
+
+        if (-not $Bin) {
+            Push-Location (Join-Path $Root "rust")
+            cargo build --release
+            $buildExit = $LASTEXITCODE
+            Pop-Location
+            if ($buildExit -ne 0) {
+                Write-ErrLine "cargo build --release failed (exit $buildExit)"
+                exit $buildExit
+            }
+            $Bin = if (Test-Path $BinExe) { $BinExe } else { $BinPlain }
+        }
+
+        & $Bin @args
+        exit $LASTEXITCODE
+    }
+    default {
+        Write-ErrLine "Unknown runtime '$Runtime'. Run scripts/setup.ps1 first."
+        exit 1
+    }
+}
