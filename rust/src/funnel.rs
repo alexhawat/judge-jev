@@ -1,3 +1,4 @@
+use crate::budget::check_budget;
 use crate::canonical::CanonicalState;
 use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment};
 use crate::paths::repo_root;
@@ -64,6 +65,9 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
     let state = CanonicalState::of(filter_state(&raw, &rubric.state_filter)?)?;
 
     let questions = build_questions(&rubric);
+    // Before the request is built: an oversized state is a local failure, not a
+    // round trip that comes back as an opaque API error.
+    check_budget(&state, &rubric)?;
     info!(
         rubric = %rubric.id,
         model = %rubric.model,

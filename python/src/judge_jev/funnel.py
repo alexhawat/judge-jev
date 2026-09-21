@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from judge_jev.budget import check_budget
 from judge_jev.canonical import CanonicalState
 from judge_jev.models import RUNTIME_NAME, RUNTIME_VERSION, JudgmentResult, Runtime, Usage
 from judge_jev.paths import repo_root
@@ -92,6 +93,10 @@ def run_judgment(
     engine = get_engine(mock, pinned)
     model = rubric.model
     questions = build_questions(rubric)
+
+    # Before the request is built: an oversized state is a local failure, not a
+    # round trip that comes back as an opaque API error.
+    check_budget(state, rubric)
 
     logger.info(
         "funnel start rubric={} model={} mock={} questions={}",

@@ -462,6 +462,93 @@ else
   echo "ok   required-path: both exit 10, same message"
 fi
 
+# ----------------------------------------------------- the token budget (#8)
+# The estimate has to be the same number on both runtimes, or the guard fires on
+# one and not the other and the choice of runtime decides whether a judgment
+# happens. Generated rather than committed: a 180KB fixture in the tree teaches
+# nothing that this one line does not.
+python3 - "$TMP/oversized.json" <<'PY'
+import json, sys
+
+# A plausibly long trajectory, not an artificially long one: 400 steps carrying
+# tool output, which is a morning of agentic work.
+steps = [{"tool": "read", "input": f"file-{i}.py", "output": "x" * 400} for i in range(400)]
+json.dump({"goal": "refactor the parser", "steps": steps, "final_output": "done"},
+          open(sys.argv[1], "w"))
+PY
+
+set +e
+py_msg="$(py run --rubric agent-trajectory --input "$TMP/oversized.json" --mock 2>&1 >/dev/null | grep '^judge-jev:' | head -1)"
+py run --rubric agent-trajectory --input "$TMP/oversized.json" --mock >/dev/null 2>&1
+py_exit=$?
+rs_msg="$(rs run --rubric agent-trajectory --input "$TMP/oversized.json" --mock 2>&1 >/dev/null | grep '^judge-jev:' | head -1)"
+rs run --rubric agent-trajectory --input "$TMP/oversized.json" --mock >/dev/null 2>&1
+rs_exit=$?
+set -e
+if [[ "$py_exit" != "$rs_exit" || "$py_msg" != "$rs_msg" ]]; then
+  echo "FAIL oversized: python=($py_exit) $py_msg" >&2
+  echo "                rust=($rs_exit) $rs_msg" >&2
+  failed=1
+elif [[ "$py_exit" != 10 ]]; then
+  # 10, not a verdict: the judgment did not happen.
+  echo "FAIL oversized: exited $py_exit, expected 10" >&2
+  failed=1
+else
+  echo "ok   oversized: both exit 10, same message"
+fi
+
+# The estimate itself, logged on every run. Comparing the message rather than the
+# verdict is the point: two runtimes can agree on `pass` while disagreeing about
+# how big the request was, and the next oversized input is where that shows up.
+estimate_of() {
+  "$@" run --rubric agent-trajectory --input "$ROOT/fixtures/agent-trajectory-pass.json" --mock 2>&1 >/dev/null \
+    | grep -o 'token estimate .* of budget [0-9]*' | head -1
+}
+py_est="$(estimate_of py)"
+rs_est="$(estimate_of rs)"
+if [[ -z "$py_est" || "$py_est" != "$rs_est" ]]; then
+  echo "FAIL token-estimate: python='$py_est' rust='$rs_est'" >&2
+  failed=1
+else
+  echo "ok   token-estimate: both log '$py_est'"
+fi
+
+# The override, so the knob is known to work on both rather than only on the one
+# whose docs mention it.
+set +e
+JUDGE_JEV_TOKEN_BUDGET=200000 py run --rubric agent-trajectory --input "$TMP/oversized.json" --mock >"$TMP/py.json" 2>/dev/null
+py_exit=$?
+JUDGE_JEV_TOKEN_BUDGET=200000 rs run --rubric agent-trajectory --input "$TMP/oversized.json" --mock >"$TMP/rs.json" 2>/dev/null
+rs_exit=$?
+set -e
+if [[ "$py_exit" != "$rs_exit" ]]; then
+  echo "FAIL budget-override: exit codes differ (python=$py_exit rust=$rs_exit)" >&2
+  failed=1
+elif [[ "$py_exit" == 10 ]]; then
+  echo "FAIL budget-override: still refused with the ceiling raised" >&2
+  failed=1
+else
+  compare_results "$TMP/py.json" "$TMP/rs.json" "budget-override" || failed=1
+fi
+
+# A ceiling that is not a positive integer is a usage mistake, and must not be
+# silently read as zero or as the default.
+set +e
+py_msg="$(JUDGE_JEV_TOKEN_BUDGET=not-a-number py run --rubric assistant-reply --input "$STDIN_INPUT" --mock 2>&1 >/dev/null | grep '^judge-jev:' | head -1)"
+JUDGE_JEV_TOKEN_BUDGET=not-a-number py run --rubric assistant-reply --input "$STDIN_INPUT" --mock >/dev/null 2>&1
+py_exit=$?
+rs_msg="$(JUDGE_JEV_TOKEN_BUDGET=not-a-number rs run --rubric assistant-reply --input "$STDIN_INPUT" --mock 2>&1 >/dev/null | grep '^judge-jev:' | head -1)"
+JUDGE_JEV_TOKEN_BUDGET=not-a-number rs run --rubric assistant-reply --input "$STDIN_INPUT" --mock >/dev/null 2>&1
+rs_exit=$?
+set -e
+if [[ "$py_exit" != "$rs_exit" || "$py_msg" != "$rs_msg" ]]; then
+  echo "FAIL budget-malformed: python=($py_exit) $py_msg" >&2
+  echo "                       rust=($rs_exit) $rs_msg" >&2
+  failed=1
+else
+  echo "ok   budget-malformed: both exit $py_exit, same message"
+fi
+
 if [[ "$failed" != 0 ]]; then
   echo "runtime parity check failed" >&2
   exit 1

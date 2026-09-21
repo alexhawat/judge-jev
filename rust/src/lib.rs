@@ -1,3 +1,4 @@
+pub mod budget;
 pub mod canonical;
 pub mod funnel;
 pub mod models;
