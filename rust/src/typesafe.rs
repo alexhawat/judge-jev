@@ -4,6 +4,7 @@
 //! `{ "state", "model", "questions" }` where each question has `type`, optional
 //! `instructions`, and `criteria`.
 
+use crate::canonical::CanonicalState;
 use crate::models::{Answer, QuestionSpec, Rubric, Usage};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -164,12 +165,15 @@ impl LiveClient {
 
     pub fn system_one(
         &self,
-        state: Value,
+        state: &CanonicalState,
         questions: HashMap<String, QuestionPayload>,
         model: &str,
     ) -> Result<SystemOneResult> {
         let body = SystemOneRequest {
-            state,
+            // The canonical text itself, not the object: `state` is documented as
+            // text, a JSON object, or an array, and sending the text is the only
+            // way the bytes survive two HTTP clients neither runtime owns.
+            state: Value::String(state.text.clone()),
             model: model.to_string(),
             questions,
         };
@@ -263,14 +267,21 @@ pub mod mock {
     }
 
     pub fn system_one(
-        state: &Value,
+        state: &CanonicalState,
         questions: &HashMap<String, QuestionPayload>,
         model: &str,
         pinned: &HashMap<String, Answer>,
     ) -> (HashMap<String, Answer>, Usage, Option<String>) {
-        let text = state.to_string().to_lowercase();
-        let has_reply = state.get("reply").map(|v| !v.is_null()).unwrap_or(false);
+        // The canonical text, so the substring scan below reads exactly the bytes a
+        // live call would have sent — and exactly the bytes the Python mock scans.
+        let text = state.text.to_lowercase();
+        let has_reply = state
+            .value
+            .get("reply")
+            .map(|v| !v.is_null())
+            .unwrap_or(false);
         let has_trajectory = state
+            .value
             .get("steps")
             .and_then(|v| v.as_array())
             .map(|a| !a.is_empty())

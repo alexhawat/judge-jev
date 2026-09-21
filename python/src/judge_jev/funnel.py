@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from judge_jev.canonical import CanonicalState
 from judge_jev.models import RUNTIME_NAME, RUNTIME_VERSION, JudgmentResult, Runtime, Usage
 from judge_jev.paths import repo_root
 from judge_jev.routing import route_verdict
@@ -75,7 +76,14 @@ def run_judgment(
 ) -> JudgmentResult:
     rubric = load_rubric(rubric_id)
     raw = load_input(input_path)
-    state = filter_state(raw, rubric.state_filter)
+    # Canonical from here on: every request is built from these exact bytes, and
+    # both runtimes build the same ones.
+    try:
+        state = CanonicalState.of(filter_state(raw, rubric.state_filter))
+    except ValueError as err:
+        # NaN and Infinity reach here from json.loads, which accepts them; the Rust
+        # runtime's parser rejects them outright. Either way, no judgment happens.
+        raise JudgeJevError(f"state cannot be serialized for the request: {err}") from err
 
     pinned = raw.get(MOCK_ANSWERS_KEY) if mock else None
     if pinned is not None and not isinstance(pinned, dict):

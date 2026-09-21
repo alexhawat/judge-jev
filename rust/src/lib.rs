@@ -1,3 +1,4 @@
+pub mod canonical;
 pub mod funnel;
 pub mod models;
 pub mod paths;
