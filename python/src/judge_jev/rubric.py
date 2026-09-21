@@ -16,6 +16,7 @@ from judge_jev.models import (
 )
 from judge_jev.paths import rubrics_dir
 from judge_jev.routing import FIELDS_BY_TYPE, OPS, TEXT_FIELDS
+from judge_jev.state_filter import StatePath, StatePathError, parse_path
 
 QUESTION_TYPES = frozenset(FIELDS_BY_TYPE)
 
@@ -143,6 +144,44 @@ def _validate_questions(questions: Any) -> dict[str, dict[str, Any]]:
     return questions
 
 
+def _parse_state_filter(raw: Any) -> list[StatePath]:
+    """Read `state_filter` entries, each a path or a `{path, required}` mapping.
+
+    Paths are parsed here rather than at judgment time so a malformed one fails at
+    load, with every other rubric error, instead of halfway through a run.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise RubricError(f"state_filter must be a list, got {type(raw).__name__}")
+    entries: list[StatePath] = []
+    for index, item in enumerate(raw):
+        where = f"state_filter[{index}]"
+        if isinstance(item, str):
+            entry = StatePath(path=item)
+        elif isinstance(item, dict):
+            unknown = set(item) - {"path", "required"}
+            if unknown:
+                raise RubricError(f"{where}: unknown keys {sorted(unknown)}; expected path, required")
+            path = item.get("path")
+            if not isinstance(path, str):
+                raise RubricError(f"{where}: needs a string 'path'")
+            required = item.get("required", False)
+            if not isinstance(required, bool):
+                raise RubricError(f"{where}: 'required' must be true or false, got {required!r}")
+            entry = StatePath(path=path, required=required)
+        else:
+            raise RubricError(
+                f"{where}: must be a path string or a mapping with 'path', got {type(item).__name__}"
+            )
+        try:
+            parse_path(entry.path)
+        except StatePathError as err:
+            raise RubricError(f"{where}: {err}") from None
+        entries.append(entry)
+    return entries
+
+
 def load_rubric(rubric_id: str) -> Rubric:
     path = rubrics_dir() / f"{rubric_id}.yaml"
     if not path.is_file():
@@ -174,7 +213,7 @@ def load_rubric(rubric_id: str) -> Rubric:
         model=str(data["model"]),
         stakes=stakes,
         confidence_floors={k: float(v) for k, v in floors.items()},
-        state_filter=list(data.get("state_filter", []) or []),
+        state_filter=_parse_state_filter(data.get("state_filter")),
         questions=questions,
         rules=rules,
     )

@@ -14,11 +14,11 @@ from judge_jev.models import RUNTIME_NAME, RUNTIME_VERSION, JudgmentResult, Runt
 from judge_jev.paths import repo_root
 from judge_jev.routing import route_verdict
 from judge_jev.rubric import load_rubric
+from judge_jev.state_filter import filter_state
 from judge_jev.typesafe_client import (
     MOCK_ANSWERS_KEY,
     JudgeJevError,
     build_questions,
-    filter_state,
     get_engine,
 )
 

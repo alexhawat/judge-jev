@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Fixtures may carry this key to pin exact mock answers. It is stripped from the
 /// state before any request is built, so it never reaches the model.
@@ -73,39 +73,6 @@ enum AnswerWire {
         legend: Option<HashMap<String, Value>>,
         probabilities: HashMap<String, f64>,
     },
-}
-
-/// Keep only the keys a rubric declares, dropping the mock override block.
-pub fn filter_state(raw: &Value, keys: &[String]) -> Value {
-    let Some(obj) = raw.as_object() else {
-        return raw.clone();
-    };
-    if keys.is_empty() {
-        let mut kept = obj.clone();
-        kept.remove(MOCK_ANSWERS_KEY);
-        return Value::Object(kept);
-    }
-    let mut filtered = serde_json::Map::new();
-    let mut missing: Vec<&str> = Vec::new();
-    for key in keys {
-        if key == MOCK_ANSWERS_KEY {
-            continue;
-        }
-        match obj.get(key) {
-            Some(v) => {
-                filtered.insert(key.clone(), v.clone());
-            }
-            None => missing.push(key.as_str()),
-        }
-    }
-    if !missing.is_empty() {
-        // Questions referencing these paths will be judging absent data.
-        warn!(
-            "state_filter keys missing from input: {}",
-            missing.join(", ")
-        );
-    }
-    Value::Object(filtered)
 }
 
 /// Read pinned mock answers out of a fixture, if it carries any.

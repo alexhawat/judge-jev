@@ -5,6 +5,7 @@ pub mod paths;
 pub mod routing;
 pub mod rubric;
 pub mod setup;
+pub mod state_filter;
 pub mod typesafe;
 
 // Verdict codes. These are a contract: hooks and CI branch on them.

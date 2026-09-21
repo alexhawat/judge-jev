@@ -312,11 +312,14 @@ run_both_against_stub() {
 
 # The check the old harness could not make: the same bytes, not merely the same
 # verdict derived from them.
+# An optional second argument is a string that must NOT appear in what was sent,
+# which is how a projection is shown to have actually dropped something rather
+# than merely reordering it.
 compare_state_bytes() {
-  python3 - "$TMP/py-req.jsonl" "$TMP/rs-req.jsonl" "$1" <<'PY'
+  python3 - "$TMP/py-req.jsonl" "$TMP/rs-req.jsonl" "$1" "${2:-}" <<'PY'
 import json, sys
 
-py_path, rs_path, label = sys.argv[1:4]
+py_path, rs_path, label, forbidden = sys.argv[1:5]
 
 
 def states(path):
@@ -333,6 +336,12 @@ if py[0] != rs[0]:
     print(f"  python {py[0]}", file=sys.stderr)
     print(f"  rust   {rs[0]}", file=sys.stderr)
     sys.exit(1)
+if forbidden:
+    leaked = [name for name, sent in (("python", py[0]), ("rust", rs[0])) if forbidden in sent]
+    if leaked:
+        print(f"FAIL {label}: {' and '.join(leaked)} sent {forbidden!r}, which no path selects",
+              file=sys.stderr)
+        sys.exit(1)
 print(f"ok   {label}: identical request state ({len(py[0])} bytes)")
 PY
 }
@@ -355,6 +364,103 @@ for case in "assistant-reply:assistant-reply-pass" "agent-trajectory:agent-traje
   compare_state_bytes "wire-$fixture" || failed=1
   compare_results "$TMP/py.json" "$TMP/rs.json" "wire-$fixture" || failed=1
 done
+
+# --------------------------------------------- nested state_filter paths (#10)
+# Each runtime unit-tests its own path semantics; only this proves the two select
+# the same thing, in the same bytes, over the wire. The rubric lives under a
+# temporary JUDGE_JEV_ROOT rather than in shared/rubrics, because `rubric list` is
+# a user-visible surface and a parity fixture does not belong in it.
+PATHS_ROOT="$TMP/paths-root"
+mkdir -p "$PATHS_ROOT/shared/rubrics"
+
+cat >"$PATHS_ROOT/shared/rubrics/parity-paths.yaml" <<'YAML'
+id: parity-paths
+version: "1.0.0"
+description: Parity-only rubric exercising nested state_filter paths.
+model: jev-1.13.0
+stakes: read_only
+confidence_floors:
+  read_only: 0.5
+state_filter:
+  - goal
+  - steps[].tool
+  - steps[].input
+  - ticket.subject
+  - final_output
+questions:
+  screen.judgeable:
+    type: noul
+    stage: screen
+    instructions: "`steps` contains steps that can be judged against `goal`."
+    criteria:
+      "true": Steps are present to evaluate.
+      "false": Missing steps.
+routing:
+  rules:
+    - verdict: skip
+      reason: Nothing judgeable here.
+      all:
+        - { answer: screen.judgeable, field: noul, op: "<", value: 0.5 }
+    - verdict: review
+      default: true
+      reason: Parity rubric routes everything else to review.
+YAML
+
+# `required: true` on a path the input does not carry. Same rubric otherwise, so
+# the only thing under test is what a missing required path does.
+sed -e 's/^  - goal$/  - { path: "goal", required: true }\n  - { path: "reply", required: true }/' \
+    -e 's/^id: parity-paths$/id: parity-required/' \
+    "$PATHS_ROOT/shared/rubrics/parity-paths.yaml" >"$PATHS_ROOT/shared/rubrics/parity-required.yaml"
+
+# Everything marked DROPPED is reachable in the input and excluded by the paths
+# above: `steps[].output`, `ticket.body`, and a top-level key nothing selects.
+cat >"$TMP/paths-input.json" <<'JSON'
+{
+  "goal": "find the readme",
+  "steps": [
+    { "tool": "glob", "input": "**/README.md", "output": "DROPPED-step-output" },
+    { "tool": "read", "input": "README.md", "output": "DROPPED-step-output" }
+  ],
+  "ticket": { "subject": "card declined", "body": "DROPPED-ticket-body" },
+  "final_output": "done",
+  "unlisted": "DROPPED-unlisted-key"
+}
+JSON
+
+JJ_ROOT="$PATHS_ROOT"
+run_both_against_stub parity-paths "$TMP/paths-input.json" 200 || failed=1
+if [[ "$PY_EXIT" != "$RS_EXIT" ]]; then
+  echo "FAIL wire-paths: exit codes differ (python=$PY_EXIT rust=$RS_EXIT)" >&2
+  failed=1
+else
+  compare_state_bytes "wire-paths" DROPPED || failed=1
+fi
+
+# A required path that is absent must fail the run identically, message and all —
+# not warn on one runtime and warn on the other with different words.
+# Both runtimes resolve rubrics through JUDGE_JEV_ROOT, so pointing it at the
+# temporary root is enough to reach the parity rubric from either one.
+export JUDGE_JEV_ROOT="$PATHS_ROOT"
+set +e
+py_msg="$(py run --rubric parity-required --input "$TMP/paths-input.json" --mock 2>&1 >/dev/null | grep '^judge-jev:' | head -1)"
+py run --rubric parity-required --input "$TMP/paths-input.json" --mock >/dev/null 2>&1
+py_exit=$?
+rs_msg="$(rs run --rubric parity-required --input "$TMP/paths-input.json" --mock 2>&1 >/dev/null | grep '^judge-jev:' | head -1)"
+rs run --rubric parity-required --input "$TMP/paths-input.json" --mock >/dev/null 2>&1
+rs_exit=$?
+set -e
+export JUDGE_JEV_ROOT="$ROOT"
+if [[ "$py_exit" != "$rs_exit" || "$py_msg" != "$rs_msg" ]]; then
+  echo "FAIL required-path: python=($py_exit) $py_msg" >&2
+  echo "                   rust=($rs_exit) $rs_msg" >&2
+  failed=1
+elif [[ "$py_exit" != 10 ]]; then
+  # 10, not a verdict: no judgment happened.
+  echo "FAIL required-path: exited $py_exit, expected 10" >&2
+  failed=1
+else
+  echo "ok   required-path: both exit 10, same message"
+fi
 
 if [[ "$failed" != 0 ]]; then
   echo "runtime parity check failed" >&2

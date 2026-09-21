@@ -125,7 +125,7 @@ class Rubric:
     model: str
     stakes: str
     confidence_floors: dict[str, float]
-    state_filter: list[str]
+    state_filter: list[Any]
     questions: dict[str, dict[str, Any]]
     rules: tuple[RoutingRule, ...] = ()
 

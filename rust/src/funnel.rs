@@ -3,7 +3,8 @@ use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment};
 use crate::paths::repo_root;
 use crate::routing::route_verdict;
 use crate::rubric::load_rubric;
-use crate::typesafe::{build_questions, filter_state, mock, pinned_answers, LiveClient};
+use crate::state_filter::filter_state;
+use crate::typesafe::{build_questions, mock, pinned_answers, LiveClient};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -60,7 +61,7 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
     let raw = load_input(input_path)?;
     // Canonical from here on: every request is built from these exact bytes, and
     // both runtimes build the same ones.
-    let state = CanonicalState::of(filter_state(&raw, &rubric.state_filter))?;
+    let state = CanonicalState::of(filter_state(&raw, &rubric.state_filter)?)?;
 
     let questions = build_questions(&rubric);
     info!(

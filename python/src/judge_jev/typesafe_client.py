@@ -22,18 +22,6 @@ class JudgeJevError(RuntimeError):
     """An operational failure: bad input, bad config, or an API problem."""
 
 
-def filter_state(raw: dict[str, Any], keys: list[str]) -> dict[str, Any]:
-    """Keep only the keys a rubric declares, dropping the mock override block."""
-    source = {k: v for k, v in raw.items() if k != MOCK_ANSWERS_KEY}
-    if not keys:
-        return source
-    missing = [k for k in keys if k not in source]
-    if missing:
-        # Questions referencing these paths will be judging absent data.
-        logger.warning("state_filter keys missing from input: {}", ", ".join(missing))
-    return {k: source[k] for k in keys if k in source}
-
-
 def build_questions(rubric: Rubric) -> dict[str, Any]:
     """Fan-out all rubric questions for one system_one call."""
     built: dict[str, Any] = {}
