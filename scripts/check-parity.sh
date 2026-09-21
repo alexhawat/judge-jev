@@ -15,7 +15,13 @@ BIN="$ROOT/rust/target/release/judge-jev"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-[[ -x "$BIN" ]] || (cd "$ROOT/rust" && cargo build --release --quiet)
+# Always build, never "build only if the binary is missing". A release binary left
+# over from another branch is not missing, it is WRONG, and this harness compares it
+# against a Python runtime that `uv run` always rebuilds from the current source. The
+# failure mode is worse than a false FAIL: a stale binary that happens to agree
+# reports "all runtimes agree" about code neither runtime is running. cargo no-ops
+# when the tree is already up to date, so this costs nothing in CI.
+(cd "$ROOT/rust" && cargo build --release --quiet)
 
 py() { (cd "$ROOT/python" && uv run judge-jev "$@"); }
 rs() { "$BIN" "$@"; }

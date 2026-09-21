@@ -89,6 +89,22 @@ A rule that *cannot* be evaluated — because an answer it reads is missing from
 response — escalates rather than being skipped, so a dropped answer can never let a
 laxer rule decide the verdict.
 
+### State filter
+
+`state_filter` entries are paths, not just top-level keys: `a` selects a key, `a.b` a
+nested key, `a[]` maps over a list, and `a[].b` projects a field from each element.
+The filtered state keeps the original shape, so paths written in `instructions` still
+resolve. An entry may instead be `{ path: ..., required: true }`; a path that does not
+resolve is dropped with a warning unless it is required, which exits `10`.
+
+In a YAML **inline** mapping the path must be quoted — `{ path: "steps[].tool",
+required: true }` — because `[` and `]` are flow indicators. Bare paths and the block
+mapping form need no quotes.
+
+Every request is built from one canonical serialization: keys sorted at every depth,
+compact separators, and `state` sent as exactly that text. Both runtimes must produce
+identical bytes, and `scripts/check-parity.sh` asserts it.
+
 ### Confidence
 
 `confidence` is the certainty of the answers the matched rule actually read
@@ -127,6 +143,15 @@ Both runtimes must produce the same `JudgmentResult` for the same input;
 `scripts/check-parity.sh` enforces it in CI.
 
 Set `JUDGE_JEV_RUNTIME=python|rust` or run setup interactively.
+
+### Environment
+
+| Variable | Effect |
+|----------|--------|
+| `JUDGE_JEV_RUNTIME` | `python` or `rust`, when `.judge-jev/runtime` is absent |
+| `TYPESAFE_API_KEY` | Required for live judging |
+| `JUDGE_JEV_TOKEN_BUDGET` | Ceiling, in estimated tokens, for one System One request (default `32000`). The estimate covers the filtered state and the rubric's questions together and is logged at INFO on every run. Exceeding it exits `10` before anything is sent, naming the largest contributing key. Must be a positive integer. |
+| `JUDGE_JEV_MAX_RETRIES` | Retries after the initial attempt on a 408, 429, 5xx, connection or timeout error (default `2`, matching `typesafe-sdk`). `0` disables retries. Both runtimes read it; backoff is 0.5s doubling to a 5s cap with jitter, under a 30s total budget per call. |
 
 ## Harness integration
 
