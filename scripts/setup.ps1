@@ -3,6 +3,21 @@ param(
     [string]$Runtime = $env:JUDGE_JEV_RUNTIME
 )
 
+# uv and cargo are native executables: a non-zero exit from either does not throw
+# in PowerShell, and nothing reads $LASTEXITCODE unless we do it ourselves. Without
+# that check this script used to write .judge-jev/runtime and print
+# "Configured runtime=..." even when the install itself had just failed, leaving a
+# Windows user told setup worked right before every instruction that follows fails.
+$ErrorActionPreference = "Stop"
+
+# Write-Error is a terminating error under $ErrorActionPreference = "Stop", which
+# would skip the explicit `exit <code>` right after it. Writing straight to stderr
+# keeps that exit in control, the same way bash's `echo ... >&2` does not itself
+# end the script.
+function Write-ErrLine([string]$Message) {
+    [Console]::Error.WriteLine($Message)
+}
+
 $Root = Split-Path -Parent $PSScriptRoot
 $env:JUDGE_JEV_ROOT = $Root
 
@@ -19,16 +34,38 @@ Set-Content -Path (Join-Path $Root ".judge-jev/runtime") -Value $Runtime
 
 switch ($Runtime) {
     "python" {
+        if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+            Write-ErrLine "uv required; see https://docs.astral.sh/uv/"
+            exit 1
+        }
         Push-Location (Join-Path $Root "python")
         uv sync --dev
+        $exitCode = $LASTEXITCODE
         Pop-Location
+        if ($exitCode -ne 0) {
+            Write-ErrLine "uv sync --dev failed (exit $exitCode)"
+            exit $exitCode
+        }
     }
     "rust" {
+        if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+            Write-ErrLine "cargo required; install Rust toolchain"
+            exit 1
+        }
         Push-Location (Join-Path $Root "rust")
         cargo build --release
+        $exitCode = $LASTEXITCODE
         Pop-Location
+        if ($exitCode -ne 0) {
+            Write-ErrLine "cargo build --release failed (exit $exitCode)"
+            exit $exitCode
+        }
     }
-    default { throw "Unknown runtime: $Runtime" }
+    default {
+        Write-ErrLine "Unknown runtime: $Runtime (use python or rust)"
+        exit 1
+    }
 }
 
-Write-Host "Configured runtime=$Runtime"
+Write-Host "Configured runtime=$Runtime at $(Join-Path $Root '.judge-jev/runtime')"
+Write-Host "Export TYPESAFE_API_KEY for live mode, or pass --mock to judge-jev run."

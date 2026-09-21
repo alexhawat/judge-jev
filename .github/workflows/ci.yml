@@ -64,6 +64,18 @@ jobs:
       - name: Runtimes must agree
         run: bash scripts/check-parity.sh
 
+  # Adapter docs drifted into teaching --mock as the default in their primary
+  # example once already (issue #5): mock answers are canned, and an integration
+  # copied straight from a README that defaults to --mock never judges anything
+  # real. This is the same shape of guard as `examples` below and `mergecraft-pin`
+  # above, scoped to the one thing that drifted.
+  adapter-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Adapter docs must not default to --mock
+        run: bash scripts/check-adapter-docs.sh
+
   # The examples are documentation that runs. Mock answers are deterministic, so an
   # example whose verdict drifts away from what its README claims fails here instead
   # of misleading the next person who copies it.
