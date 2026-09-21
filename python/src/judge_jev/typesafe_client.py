@@ -108,7 +108,7 @@ class MockEngine:
         state: dict[str, Any] | str,
         questions: dict[str, Any],
         model: str,
-    ) -> tuple[dict[str, dict[str, Any]], Usage, str]:
+    ) -> tuple[dict[str, dict[str, Any]], Usage, str, str]:
         answers: dict[str, dict[str, Any]] = {}
         text = json.dumps(state, default=str).lower() if isinstance(state, dict) else str(state).lower()
         has_reply = isinstance(state, dict) and bool(state.get("reply"))
@@ -160,7 +160,8 @@ class MockEngine:
                 }
         usage = Usage(input_tokens=120, output_tokens=45)
         logger.info("mock system_one model={} questions={}", model, len(questions))
-        return answers, usage, "mock-request-id"
+        # Nothing answered, so the model that "answered" is the one we asked for.
+        return answers, usage, "mock-request-id", model
 
 
 class LiveEngine:
@@ -169,7 +170,7 @@ class LiveEngine:
         state: dict[str, Any] | str,
         questions: dict[str, Any],
         model: str,
-    ) -> tuple[dict[str, dict[str, Any]], Usage, str | None]:
+    ) -> tuple[dict[str, dict[str, Any]], Usage, str | None, str]:
         api_key = os.environ.get("TYPESAFE_API_KEY")
         if not api_key:
             raise JudgeJevError("TYPESAFE_API_KEY is required for live mode (use --mock for CI)")
@@ -193,7 +194,13 @@ class LiveEngine:
                 usage.output_tokens,
                 request_id,
             )
-            return normalize_answers(response.answers), usage, request_id
+            # `response.model` is what actually judged, which is not always what we
+            # asked for: the API may resolve an alias or serve a different build. The
+            # Rust runtime has always recorded the answering model; this runtime used
+            # to record the requested one and drop this value after logging it, so the
+            # same judgment was attributed to two different models depending on which
+            # runtime ran it.
+            return normalize_answers(response.answers), usage, request_id, response.model
 
 
 def get_engine(mock: bool, pinned: dict[str, dict[str, Any]] | None = None) -> MockEngine | LiveEngine:

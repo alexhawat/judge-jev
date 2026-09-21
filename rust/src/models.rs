@@ -15,17 +15,50 @@ pub fn stage_index(stage: &str) -> Option<usize> {
     STAGE_ORDER.iter().position(|s| *s == stage)
 }
 
+/// Token counts, `null` when the API reported none.
+///
+/// The fields are emitted even when absent. They used to be skipped, which made a
+/// replayed result differ from Python's on shape alone — `{}` against
+/// `{"input_tokens": null, "output_tokens": null}` — for any saved judgment that
+/// carried no usage. `scripts/check-parity.sh` could not see it, because it only
+/// compared successful mock runs and the mock always fills both.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
+}
+
+/// Which build produced a result.
+///
+/// Recorded because a verdict is only auditable against the code that reached it:
+/// `scripts/check-parity.sh` exists precisely because the two runtimes can drift,
+/// and a saved result that cannot say which one ran it cannot be checked against
+/// the other.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Runtime {
+    pub name: String,
+    pub version: String,
+}
+
+pub const RUNTIME_NAME: &str = "rust";
+pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Runtime {
+            name: RUNTIME_NAME.to_string(),
+            version: RUNTIME_VERSION.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JudgmentResult {
     pub rubric_id: String,
+    /// The rubric version that produced this verdict. Without it `replay` re-routes
+    /// saved answers against whatever the rubric says today and reports the new
+    /// verdict as though it were the original judgment.
+    pub rubric_version: String,
     pub verdict: String,
     pub confidence: f64,
     pub stage: String,
@@ -40,8 +73,10 @@ pub struct JudgmentResult {
     /// The floor `confidence` was checked against, from confidence_floors[stakes].
     #[serde(default)]
     pub confidence_floor: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Emitted even when absent, for the same reason as `Usage`'s fields.
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub runtime: Runtime,
 }
 
 /// Replay input: a previously saved judgment. Only `rubric_id` and `answers` are
@@ -50,6 +85,10 @@ pub struct JudgmentResult {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SavedJudgment {
     pub rubric_id: String,
+    /// Absent on any result saved before provenance existed, which `replay` treats
+    /// as drift: a result that cannot say what judged it cannot be re-derived.
+    #[serde(default)]
+    pub rubric_version: Option<String>,
     pub answers: HashMap<String, Answer>,
     #[serde(default)]
     pub model: Option<String>,
@@ -66,6 +105,7 @@ impl JudgmentResult {
     pub fn as_saved(&self) -> SavedJudgment {
         SavedJudgment {
             rubric_id: self.rubric_id.clone(),
+            rubric_version: Some(self.rubric_version.clone()),
             answers: self.answers.clone(),
             model: Some(self.model.clone()),
             usage: self.usage.clone(),

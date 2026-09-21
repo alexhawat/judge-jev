@@ -28,9 +28,26 @@ ex_summary
 echo
 echo "  exit code         $EX_CODE"
 
+# 3. Replay routes against the rubric ON DISK, so a saved judgment whose rubric
+#    has moved since cannot quietly be re-decided under the new rules.
+DRIFTED="$(mktemp)"
+trap 'rm -f "$SAVED" "$DRIFTED"' EXIT
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["rubric_version"]="1.0.0"; json.dump(d, open(sys.argv[2],"w"))' \
+  "$SAVED" "$DRIFTED"
+
 echo
-echo "Note: replay routes against the rubric ON DISK TODAY, and the saved result"
-echo "does not record which rubric version produced it. Edit a threshold in"
-echo "shared/rubrics/assistant-reply.yaml and replay the same file to watch the"
-echo "verdict change with no warning. That gap is issue #6."
+echo "3. the same answers, saved under an older rubric version:"
+set +e
+DRIFT_MESSAGE="$("$JUDGE" replay --input "$DRIFTED" 2>&1 >/dev/null | tail -1)"
+DRIFT_CODE=$?
+set -e
+echo "  exit $DRIFT_CODE (10 = the judgment did not happen)"
+echo "  $DRIFT_MESSAGE"
+
+echo
+echo "Routing it anyway is a deliberate act — --allow-version-drift re-routes it and"
+echo "records the drift in routing_reason, so an audit can still tell which rules"
+echo "actually decided. Without that gate, editing a threshold in"
+echo "shared/rubrics/assistant-reply.yaml would silently change what a past judgment"
+echo "claims to have concluded."
 exit "$EX_CODE"
