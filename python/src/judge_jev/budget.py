@@ -31,8 +31,7 @@ from typing import Any
 from loguru import logger
 
 from judge_jev.canonical import CanonicalState, canonical_json, canonical_size
-from judge_jev.models import Rubric
-from judge_jev.typesafe_client import JudgeJevError
+from judge_jev.models import JudgeJevError, Rubric
 
 # Roughly what a System One call admits, shared between state and questions.
 DEFAULT_TOKEN_BUDGET = 32_000

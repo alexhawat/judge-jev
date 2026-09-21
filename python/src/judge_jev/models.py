@@ -36,6 +36,10 @@ class RubricError(ValueError):
     """A rubric is malformed. Raised at load time, never at judgment time."""
 
 
+class JudgeJevError(RuntimeError):
+    """An operational failure: bad input, bad config, or an API problem."""
+
+
 @dataclass
 class Runtime:
     """Which build produced a result.

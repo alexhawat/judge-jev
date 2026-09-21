@@ -450,6 +450,8 @@ rs run --rubric parity-required --input "$TMP/paths-input.json" --mock >/dev/nul
 rs_exit=$?
 set -e
 export JUDGE_JEV_ROOT="$ROOT"
+# Back to the real rubrics: everything after this judges with the shipped set.
+JJ_ROOT="$ROOT"
 if [[ "$py_exit" != "$rs_exit" || "$py_msg" != "$rs_msg" ]]; then
   echo "FAIL required-path: python=($py_exit) $py_msg" >&2
   echo "                   rust=($rs_exit) $rs_msg" >&2
@@ -547,6 +549,68 @@ if [[ "$py_exit" != "$rs_exit" || "$py_msg" != "$rs_msg" ]]; then
   failed=1
 else
   echo "ok   budget-malformed: both exit $py_exit, same message"
+fi
+
+# ------------------------------------------------------------- retry (#9)
+# The check that would have caught it: Rust issued one request and bailed on any
+# non-2xx while Python retried through the SDK, so a 503 was transparent on one
+# runtime and a hard failure on the other. Against a stub that fails twice and then
+# succeeds, both must reach the same verdict — and must actually have retried,
+# which is why the request count is asserted too. A case that only compared
+# verdicts could pass with one runtime succeeding first try.
+count_requests() { grep -c . "$1" 2>/dev/null || echo 0; }
+
+run_both_against_stub assistant-reply "$STDIN_INPUT" 503,503,200 || failed=1
+py_reqs="$(count_requests "$TMP/py-req.jsonl")"
+rs_reqs="$(count_requests "$TMP/rs-req.jsonl")"
+if [[ "$PY_EXIT" != "$RS_EXIT" ]]; then
+  echo "FAIL retry-503: exit codes differ (python=$PY_EXIT rust=$RS_EXIT)" >&2
+  failed=1
+elif [[ "$py_reqs" != 3 || "$rs_reqs" != 3 ]]; then
+  echo "FAIL retry-503: expected 3 requests each, got python=$py_reqs rust=$rs_reqs" >&2
+  failed=1
+else
+  compare_results "$TMP/py.json" "$TMP/rs.json" "retry-503" || failed=1
+  echo "ok   retry-503: both recovered after 2 failures, 3 requests each"
+fi
+
+# Exhausting the retries has to fail on both, after the same number of attempts.
+# The message is not compared: the SDK words its own errors and this runtime words
+# its own, and neither is wrong. The exit code and the attempt count are the
+# contract.
+export JUDGE_JEV_MAX_RETRIES=1
+run_both_against_stub assistant-reply "$STDIN_INPUT" 503 || failed=1
+py_reqs="$(count_requests "$TMP/py-req.jsonl")"
+rs_reqs="$(count_requests "$TMP/rs-req.jsonl")"
+unset JUDGE_JEV_MAX_RETRIES
+if [[ "$PY_EXIT" != "$RS_EXIT" ]]; then
+  echo "FAIL retry-exhausted: exit codes differ (python=$PY_EXIT rust=$RS_EXIT)" >&2
+  failed=1
+elif [[ "$PY_EXIT" != 10 ]]; then
+  echo "FAIL retry-exhausted: exited $PY_EXIT, expected 10" >&2
+  failed=1
+elif [[ "$py_reqs" != 2 || "$rs_reqs" != 2 ]]; then
+  # One initial attempt plus JUDGE_JEV_MAX_RETRIES=1, on both runtimes: the knob
+  # has to reach the SDK's policy as well as this runtime's.
+  echo "FAIL retry-exhausted: expected 2 requests each, got python=$py_reqs rust=$rs_reqs" >&2
+  failed=1
+else
+  echo "ok   retry-exhausted: both exit 10 after 2 attempts"
+fi
+
+# A 4xx that is not 408 or 429 must not be retried by either: a malformed request
+# will not fix itself, and retrying burns the budget before a real outage can use it.
+run_both_against_stub assistant-reply "$STDIN_INPUT" 400 || failed=1
+py_reqs="$(count_requests "$TMP/py-req.jsonl")"
+rs_reqs="$(count_requests "$TMP/rs-req.jsonl")"
+if [[ "$PY_EXIT" != "$RS_EXIT" ]]; then
+  echo "FAIL no-retry-4xx: exit codes differ (python=$PY_EXIT rust=$RS_EXIT)" >&2
+  failed=1
+elif [[ "$py_reqs" != 1 || "$rs_reqs" != 1 ]]; then
+  echo "FAIL no-retry-4xx: expected 1 request each, got python=$py_reqs rust=$rs_reqs" >&2
+  failed=1
+else
+  echo "ok   no-retry-4xx: both gave up after 1 attempt"
 fi
 
 if [[ "$failed" != 0 ]]; then

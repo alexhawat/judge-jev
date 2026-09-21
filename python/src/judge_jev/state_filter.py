@@ -67,7 +67,8 @@ from typing import Any
 
 from loguru import logger
 
-from judge_jev.typesafe_client import MOCK_ANSWERS_KEY, JudgeJevError
+from judge_jev.models import JudgeJevError
+from judge_jev.typesafe_client import MOCK_ANSWERS_KEY
 
 # A `[]` segment: map over the list at this point.
 EACH = object()

@@ -9,17 +9,14 @@ from loguru import logger
 from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
 
 from judge_jev.canonical import CanonicalState
-from judge_jev.models import Rubric, Usage
+from judge_jev.models import JudgeJevError, Rubric, Usage
+from judge_jev.retry import PER_OPERATION_TIMEOUT, retry_policy
 
 PINNED_MODEL = "jev-1.13.0"
 
 # Fixtures may carry this key to pin exact mock answers. It is stripped from the
 # state before any request is built, so it never reaches the model.
 MOCK_ANSWERS_KEY = "_mock_answers"
-
-
-class JudgeJevError(RuntimeError):
-    """An operational failure: bad input, bad config, or an API problem."""
 
 
 def build_questions(rubric: Rubric) -> dict[str, Any]:
@@ -164,7 +161,15 @@ class LiveEngine:
         api_key = os.environ.get("TYPESAFE_API_KEY")
         if not api_key:
             raise JudgeJevError("TYPESAFE_API_KEY is required for live mode (use --mock for CI)")
-        with TypeSafeClient(api_key=api_key, model=model) as client:
+        # Retry and timeout are passed explicitly rather than inherited: the Rust
+        # runtime has to mirror them, and a default that is written down on one side
+        # and assumed on the other is how the two drifted apart.
+        with TypeSafeClient(
+            api_key=api_key,
+            model=model,
+            retry=retry_policy(),
+            timeout=PER_OPERATION_TIMEOUT,
+        ) as client:
             # The canonical text itself, not the object: `state` is documented as
             # text, a JSON object, or an array, and sending the text is the only way
             # the bytes survive two HTTP clients neither runtime owns.

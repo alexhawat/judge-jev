@@ -6,7 +6,8 @@
 
 use crate::canonical::CanonicalState;
 use crate::models::{Answer, QuestionSpec, Rubric, Usage};
-use anyhow::{bail, Context, Result};
+use crate::retry::{is_retryable_status, retry_after_seconds, Outcome, RetryPolicy};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -18,10 +19,6 @@ pub const MOCK_ANSWERS_KEY: &str = "_mock_answers";
 
 const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 const SYSTEM_ONE_PATH: &str = "/v1/systemone";
-
-/// Seconds before the request is abandoned. minreq blocks forever without this;
-/// the Python SDK defaults to 10s per operation, so keep the two runtimes close.
-const REQUEST_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, Serialize)]
 struct SystemOneRequest {
@@ -119,6 +116,7 @@ pub type SystemOneResult = (HashMap<String, Answer>, Usage, Option<String>, Stri
 pub struct LiveClient {
     api_key: String,
     base_url: String,
+    retry: RetryPolicy,
 }
 
 impl LiveClient {
@@ -127,7 +125,11 @@ impl LiveClient {
             .context("TYPESAFE_API_KEY is required for live mode (use --mock for CI)")?;
         let base_url =
             std::env::var("TYPESAFE_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-        Ok(Self { api_key, base_url })
+        Ok(Self {
+            api_key,
+            base_url,
+            retry: RetryPolicy::from_env()?,
+        })
     }
 
     pub fn system_one(
@@ -145,26 +147,53 @@ impl LiveClient {
             questions,
         };
         let url = format!("{}{}", self.base_url.trim_end_matches('/'), SYSTEM_ONE_PATH);
-        let response = minreq::post(url)
-            .with_timeout(REQUEST_TIMEOUT_SECS)
-            .with_header("Authorization", format!("Bearer {}", self.api_key))
-            .with_header("Content-Type", "application/json")
-            .with_header("Accept", "application/json")
-            .with_json(&body)
-            .context("TypeSafe HTTP request failed")?
-            .send()
-            .context("TypeSafe HTTP transport failed")?;
+
+        // One attempt, classified for the retry policy. A 408, a 429, a 5xx or a
+        // transport failure is worth another go; any other 4xx is the request's own
+        // fault and will fail again identically.
+        let response = self.retry.run(|timeout_secs, _attempt| {
+            let request = minreq::post(&url)
+                .with_timeout(timeout_secs)
+                .with_header("Authorization", format!("Bearer {}", self.api_key))
+                .with_header("Content-Type", "application/json")
+                .with_header("Accept", "application/json")
+                .with_json(&body);
+            let request = match request.context("TypeSafe HTTP request failed") {
+                Ok(request) => request,
+                // Serializing the body failed: no amount of retrying fixes that.
+                Err(err) => return Outcome::Fatal(err),
+            };
+            match request.send() {
+                Ok(response) => {
+                    let status = response.status_code;
+                    if (200..300).contains(&status) {
+                        return Outcome::Done(response);
+                    }
+                    let text = String::from_utf8_lossy(response.as_bytes()).to_string();
+                    let error = anyhow::anyhow!("TypeSafe API error {status}: {text}");
+                    if is_retryable_status(status) {
+                        let after = retry_after_seconds(
+                            response.headers.get("retry-after-ms").map(|v| v.as_str()),
+                            response.headers.get("retry-after").map(|v| v.as_str()),
+                        );
+                        Outcome::Retry { error, after }
+                    } else {
+                        Outcome::Fatal(error)
+                    }
+                }
+                // Could not reach or read from the server, or the attempt timed
+                // out. The SDK retries both.
+                Err(err) => Outcome::Retry {
+                    error: anyhow::Error::new(err).context("TypeSafe HTTP transport failed"),
+                    after: None,
+                },
+            }
+        })?;
 
         let request_id = response
             .headers
             .get("x-typesafe-request-id")
             .map(|v| v.to_string());
-
-        let status = response.status_code;
-        if !(200..300).contains(&status) {
-            let text = String::from_utf8_lossy(response.as_bytes());
-            bail!("TypeSafe API error {status}: {text}");
-        }
 
         let parsed: SystemOneResponse =
             serde_json::from_slice(response.as_bytes()).context("decode TypeSafe response")?;
