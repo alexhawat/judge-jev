@@ -80,6 +80,7 @@ def test_powershell_selection_exit_passthrough_and_setup_rollback(tmp_path: Path
     assert result.returncode == 0
     assert Path(env["FAKE_LOG"] + ".runtime").read_text().strip() == "python"
 
+    env["JUDGE_JEV_RUNTIME"] = "python"
     for exit_code in (0, 1, 2, 3, 4, 10, 11):
         write_cmd(root / "python/.venv/Scripts/judge-jev.cmd", "python", exit_code)
         result = invoke(root / "scripts/judge-jev.ps1", root, env, "run")
