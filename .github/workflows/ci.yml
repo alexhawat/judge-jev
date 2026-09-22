@@ -6,7 +6,8 @@ on:
   pull_request:
 
 jobs:
-  python:
+  python-matrix:
+    name: python (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -41,6 +42,25 @@ jobs:
         run: |
           cd python
           uv run judge-jev run --rubric assistant-reply --input ../fixtures/assistant-reply-pass.json --mock
+
+  # Keep the branch-protection contract stable while testing every supported
+  # Python version independently. This job must run even when a matrix job does
+  # not, and only succeeds when the complete matrix succeeded.
+  python:
+    name: python
+    runs-on: ubuntu-latest
+    needs: python-matrix
+    if: ${{ always() }}
+    steps:
+      - name: Require every supported Python job to pass
+        env:
+          MATRIX_RESULT: ${{ needs.python-matrix.result }}
+        run: |
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "Python matrix result: $MATRIX_RESULT" >&2
+            exit 1
+          fi
+          echo "Python matrix result: success"
 
   rust:
     runs-on: ubuntu-latest
