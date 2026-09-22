@@ -16,6 +16,7 @@ from judge_jev.tuning import (
     join_corpus,
     load_cost_policy,
     pareto_front,
+    quality_provenance_limitations,
     threshold_search,
     validate_support,
 )
@@ -106,6 +107,21 @@ def test_policy_and_support_configuration_reject_invalid_values(tmp_path: Path) 
     )
     with pytest.raises(JudgeJevError, match="finite"):
         load_cost_policy(invalid)
+
+
+def test_quality_claim_rejects_synthetic_dataset_and_canned_results() -> None:
+    rows = [
+        {
+            "case_id": "mocked",
+            "provenance": "recorded_capture",
+            "result": {"mock": False, "backend_provenance": "canned_demo"},
+        }
+    ]
+    limitations = quality_provenance_limitations(
+        rows, {"dataset_kind": "synthetic-curated-smoke"}
+    )
+    assert any("synthetic" in item for item in limitations)
+    assert any("canned/mock" in item for item in limitations)
 
 
 def test_asymmetric_false_pass_cost_ranks_below_review() -> None:

@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 
 from judge_jev.evaluation import evaluate as evaluate_labeled
-from judge_jev.evaluation import index_results, validate_cases
+from judge_jev.evaluation import index_results, read_dataset_metadata, validate_cases
 from judge_jev.models import VERDICTS, GateOutcome, JudgeJevError, Rubric
 from judge_jev.paths import rubrics_dir, tuning_dir
 from judge_jev.reroute import reroute_with_rubric
@@ -176,6 +176,30 @@ def validate_support(
             f"insufficient class/split support (minimum {minimum}): {', '.join(missing)}"
         )
     return support
+
+
+def quality_provenance_limitations(
+    result_rows: list[dict[str, Any]], dataset_metadata: dict[str, Any]
+) -> list[str]:
+    limitations = []
+    dataset_kind = str(dataset_metadata.get("dataset_kind") or "unknown").lower()
+    if "synthetic" in dataset_kind:
+        limitations.append(f"dataset_kind {dataset_kind!r} is synthetic")
+    canned = []
+    for row in result_rows:
+        result = row.get("result", row)
+        provenance = str(row.get("provenance") or "").lower()
+        if (
+            isinstance(result, dict)
+            and (
+                result.get("mock") is True
+                or result.get("backend_provenance") == "canned_demo"
+            )
+        ) or any(label in provenance for label in ("synthetic", "canned", "mock")):
+            canned.append(str(row.get("case_id") or row.get("id") or "unknown"))
+    if canned:
+        limitations.append(f"canned/mock/synthetic result evidence: {sorted(canned)}")
+    return limitations
 
 
 def discover_parameters(rubric: Rubric) -> list[NumericParameter]:
@@ -467,6 +491,7 @@ def threshold_search(
     policy = load_cost_policy(cost_policy_path)
     try:
         cases = validate_cases(read_jsonl(cases_path))
+        dataset_metadata = read_dataset_metadata(cases_path)
         raw_results = read_jsonl(results_path)
         index_results(raw_results)
     except (ValueError, OSError) as err:
@@ -477,6 +502,7 @@ def threshold_search(
         rubric_id=rubric_id,
         allow_legacy_provenance=synthetic_demo,
     )
+    provenance_limitations = quality_provenance_limitations(raw_results, dataset_metadata)
     support_warning = None
     try:
         support = validate_support(rows, policy.get("required_classes", []), minimum_support)
@@ -578,8 +604,13 @@ def threshold_search(
         "api_calls": 0,
         "synthetic_demo": synthetic_demo,
         "quality_claim_allowed": (
-            not synthetic_demo and support_warning is None and bool(proposals)
+            not synthetic_demo
+            and support_warning is None
+            and not provenance_limitations
+            and bool(proposals)
         ),
+        "dataset_metadata": dataset_metadata,
+        "quality_provenance_limitations": provenance_limitations,
         "support": support,
         "support_warning": support_warning,
         "seed": seed,
