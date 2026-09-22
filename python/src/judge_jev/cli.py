@@ -274,8 +274,9 @@ def _precheck(argv: list[str]) -> str | None:
     elif command == "tune":
         optional_value_flags = (
             "--seed", "--iterations", "--candidates", "--min-support", "--cost-policy", "--output",
-            "--task-token-cap", "--max-tokens-per-call", "--reflection-cost-cap", "--reflection-model",
-            "--backend", "--cache",
+            "--budget-mode", "--reflection-call-budget", "--task-token-cap",
+            "--max-tokens-per-call", "--reflection-cost-cap", "--reflection-model",
+            "--backend", "--cache", "--max-gate-candidates",
         )
     elif command == "replay":
         optional_value_flags = ("--format",)

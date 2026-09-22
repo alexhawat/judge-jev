@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import judge_jev.cli as cli_module
 from judge_jev.backend import JEV_CAPABILITIES, BackendResponse
+from judge_jev.cli import main
 from judge_jev.gepa_tuning import (
     BudgetLedger,
     CallLimitedLM,
@@ -406,19 +408,41 @@ def test_public_call_budget_mode_runs_actual_pinned_gepa_offline(
             "usage": {"input_tokens": 1, "output_tokens": 1},
         }
 
-    report = instruction_proposal(
-        "assistant-reply",
-        "score.helpfulness",
-        cases,
-        live=True,
-        budget_mode="calls",
-        metric_budget=60,
-        reflection_call_budget=1,
-        reflection_model="fake/offline",
-        minimum_support=1,
-        evaluator=evaluator,
-        seed=1,
+    original_instruction_proposal = instruction_proposal
+
+    def offline_instruction_proposal(*args, **kwargs):
+        kwargs["evaluator"] = evaluator
+        return original_instruction_proposal(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "instruction_proposal", offline_instruction_proposal)
+    code = main(
+        [
+            "tune",
+            "instructions",
+            "--rubric",
+            "assistant-reply",
+            "--question",
+            "score.helpfulness",
+            "--set",
+            str(cases),
+            "--budget",
+            "60",
+            "--live",
+            "--budget-mode",
+            "calls",
+            "--reflection-call-budget",
+            "1",
+            "--reflection-model",
+            "fake/offline",
+            "--min-support",
+            "1",
+            "--max-gate-candidates",
+            "2",
+        ]
     )
+    captured = capsys.readouterr()
+    assert code == 0
+    report = json.loads(captured.out)
     assert report["status"] == "proposal generated for review"
     assert report["api_calls"] <= 60
     assert report["reflection_calls"] == 1
@@ -437,6 +461,4 @@ def test_public_call_budget_mode_runs_actual_pinned_gepa_offline(
         for candidate in report["candidate_proposals"]
     )
     assert __import__("os").environ["JUDGE_JEV_MAX_RETRIES"] == "7"
-    captured = capsys.readouterr()
-    assert captured.out == ""
     assert "Iteration" in captured.err
