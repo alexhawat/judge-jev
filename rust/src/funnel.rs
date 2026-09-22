@@ -1,7 +1,7 @@
 use crate::budget::check_budget;
 use crate::canonical::CanonicalState;
 use crate::gates::{build_state_projection, evaluate_gates, GateContext};
-use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment, StateProjection};
+use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment};
 use crate::paths::repo_root;
 use crate::routing::route_verdict;
 use crate::rubric::load_rubric;

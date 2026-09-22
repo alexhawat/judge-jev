@@ -144,6 +144,8 @@ impl JudgmentResult {
             usage: self.usage.clone(),
             mock: self.mock,
             request_id: self.request_id.clone(),
+            state_projection: self.state_projection.clone(),
+            deterministic_gates: self.deterministic_gates.clone(),
         }
     }
 }
