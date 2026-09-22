@@ -56,6 +56,19 @@ def fake_raw_judge(tmp_path: Path, code: int, stdout: str) -> Path:
     return script
 
 
+def test_powershell_launcher_uses_a_powershell_host(tmp_path: Path, monkeypatch) -> None:
+    launcher = tmp_path / "judge-jev.ps1"
+    launcher.write_text("exit 0\n")
+    monkeypatch.setattr(hook.shutil, "which", lambda name: "/tools/pwsh" if name == "pwsh" else None)
+    assert hook._judge_command(launcher) == [
+        "/tools/pwsh",
+        "-NoLogo",
+        "-NoProfile",
+        "-File",
+        str(launcher.resolve()),
+    ]
+
+
 def test_stop_event_normalizes_real_stdin_shape() -> None:
     normalized = hook.normalize_event(event(FIXTURES / "transcript-stop.jsonl"))
     assert normalized == {

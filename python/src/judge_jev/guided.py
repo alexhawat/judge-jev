@@ -64,8 +64,10 @@ def _multiline(label: str) -> str:
     while True:
         try:
             line = input()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             break
+        except KeyboardInterrupt as err:
+            raise GuidedUsageError(f"{label} entry cancelled") from err
         if line == ".done":
             break
         lines.append(line)
@@ -269,6 +271,10 @@ def _runtime_status() -> tuple[str, str]:
     return "python", "default (no environment override or saved preference)"
 
 
+def _public_launcher(root: Path) -> Path:
+    return root / "scripts" / ("judge-jev.ps1" if os.name == "nt" else "judge-jev")
+
+
 def doctor_report() -> dict[str, Any]:
     runtime, why = _runtime_status()
     smoke_error = None
@@ -284,7 +290,7 @@ def doctor_report() -> dict[str, Any]:
                 "UV_CACHE_DIR", str(Path(tempfile.gettempdir()) / "judge-jev-uv-cache")
             )
             completed = subprocess.run(  # noqa: S603 - fixed repository scripts.
-                [sys.executable, str(root / "hooks/claude-code/claude_code_hook.py"), "doctor", "--event", str(claude_fixture), "--judge", str(root / "scripts/judge-jev")],
+                [sys.executable, str(root / "hooks/claude-code/claude_code_hook.py"), "doctor", "--event", str(claude_fixture), "--judge", str(_public_launcher(root))],
                 capture_output=True,
                 text=True,
                 check=False,

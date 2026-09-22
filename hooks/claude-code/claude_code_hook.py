@@ -128,11 +128,20 @@ def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
     return {"goal": goal, "steps": steps, "final_output": final_output}
 
 
-def run_judge(judge: Path, normalized: dict[str, Any], *, mock: bool = False) -> tuple[int, dict[str, Any] | None, str]:
+def _judge_command(judge: Path) -> list[str]:
     judge = judge.expanduser().resolve()
     if not judge.is_file():
         raise HookError(f"judge executable does not exist: {judge}")
-    command = [str(judge), "run", "--rubric", "agent-trajectory", "--input", "-"]
+    if judge.suffix.lower() == ".ps1":
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            raise HookError("PowerShell is required to run the .ps1 judge launcher")
+        return [powershell, "-NoLogo", "-NoProfile", "-File", str(judge)]
+    return [str(judge)]
+
+
+def run_judge(judge: Path, normalized: dict[str, Any], *, mock: bool = False) -> tuple[int, dict[str, Any] | None, str]:
+    command = [*_judge_command(judge), "run", "--rubric", "agent-trajectory", "--input", "-"]
     if mock:
         command.append("--mock")
     completed = subprocess.run(

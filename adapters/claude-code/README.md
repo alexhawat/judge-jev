@@ -27,6 +27,14 @@ python3 hooks/claude-code/claude_code_hook.py install \
   --judge "$PWD/scripts/judge-jev"
 ```
 
+On Windows, run the installer from PowerShell with the PowerShell launcher. The
+installed Python hook invokes this `.ps1` through `pwsh` (or Windows PowerShell):
+
+```powershell
+python hooks/claude-code/claude_code_hook.py install `
+  --judge "$PWD\scripts\judge-jev.ps1"
+```
+
 Use `--settings /path/to/temporary/settings.json` to inspect or test another
 file. The installer preserves unrelated settings and hooks, replaces only its own
 tagged entry, writes atomically, and backs up an existing file. Repository tests

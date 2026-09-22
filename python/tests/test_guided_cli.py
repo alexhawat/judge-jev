@@ -7,9 +7,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from judge_jev.cli import EXIT_USAGE, main
 from judge_jev.history import delete_all, list_entries, save_result
-from judge_jev.guided import _multiline
+from judge_jev.guided import GuidedUsageError, _multiline, _public_launcher
 
 
 def test_no_args_non_tty_is_usage_without_prompt(capsys) -> None:
@@ -21,8 +23,31 @@ def test_no_args_non_tty_is_usage_without_prompt(capsys) -> None:
 
 def test_multiline_keyboard_cancel_is_clean(monkeypatch, capsys) -> None:
     monkeypatch.setattr("builtins.input", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
-    assert _multiline("reply") == ""
+    with pytest.raises(GuidedUsageError, match="reply entry cancelled"):
+        _multiline("reply")
     assert "Finish with" in capsys.readouterr().err
+
+
+def test_keyboard_cancel_never_submits_partial_live_reply(monkeypatch, capsys) -> None:
+    responses = iter(["partially typed prompt", KeyboardInterrupt()])
+
+    def typed_then_cancel() -> str:
+        value = next(responses)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr("judge_jev.guided.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", typed_then_cancel)
+    assert main(["reply"]) == EXIT_USAGE
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "entry cancelled" in captured.err
+
+
+def test_public_launcher_selects_powershell_on_windows(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("judge_jev.guided.os.name", "nt")
+    assert _public_launcher(tmp_path) == tmp_path / "scripts" / "judge-jev.ps1"
 
 
 def test_reply_mock_human_and_json(capsys) -> None:
