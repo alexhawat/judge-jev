@@ -9,7 +9,12 @@ import pytest
 
 from judge_jev.cli import EXIT_ERROR, main
 from judge_jev.funnel import run_judgment
-from judge_jev.gates import evaluate_gates, GateContext
+from judge_jev.gates import (
+    GateContext,
+    evaluate_gates,
+    state_filter_paths,
+    state_projection_hash,
+)
 from judge_jev.logfire_tracing import TracingConfig, configure_tracing
 from judge_jev.models import JudgeJevError
 from judge_jev.rubric import load_rubric
@@ -17,6 +22,35 @@ from judge_jev.rubric import load_rubric
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = REPO / "fixtures"
 SCHEMA = json.loads((REPO / "shared" / "schemas" / "judgment-result.schema.json").read_text())
+
+
+@pytest.mark.parametrize(
+    ("paths", "expected"),
+    [
+        ([], "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"),
+        (
+            ["context", "prompt", "reply"],
+            "sha256:7d26c079d3169ddc395d6e9418adebd2c8ed8ef2936aa0ff5f170f1430ae265b",
+        ),
+        (["résumé"], "sha256:c7e84dd64340d2a754bfa25062709546dd2b70396126660ffd7eed1c387b84df"),
+        (["emoji.😀"], "sha256:12fdef3a76819ccbc0b8f6ea1c0d91d79db25eee67ab30ce15c4eb1d753a18a7"),
+        (["\x7f"], "sha256:b10d448be414f5c5ccc0aa89a007547d37a76f46e1209f1147a63f7a6cb090ed"),
+        (
+            ["line\nfeed", 'quote"path', "slash\\path"],
+            "sha256:bc0d131ca5c14a8ad6c0a5d27237d1c657b08347f995888706a5540737e74bbe",
+        ),
+    ],
+)
+def test_projection_hash_uses_compact_ascii_escaped_json(paths, expected):
+    assert state_projection_hash(paths) == expected
+
+
+def test_projection_path_normalization_sorts_before_hashing():
+    paths = state_filter_paths(["reply", "context", "prompt"])
+    assert paths == ["context", "prompt", "reply"]
+    assert state_projection_hash(paths) == (
+        "sha256:7d26c079d3169ddc395d6e9418adebd2c8ed8ef2936aa0ff5f170f1430ae265b"
+    )
 
 
 def test_judgment_result_records_contract_fields():

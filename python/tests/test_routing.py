@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -309,6 +310,79 @@ def test_replay_preserves_answers_and_verdict():
     assert replayed.verdict == saved.verdict
     assert replayed.confidence == pytest.approx(saved.confidence)
     assert replayed.deciding_answers == saved.deciding_answers
+
+
+def test_replay_recomputes_current_gates_under_stricter_rubric(monkeypatch):
+    from judge_jev import funnel
+
+    saved = run_judgment("assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True)
+    saved_data = saved.to_dict()
+    saved_data["rubric_version"] = "1.9.0"
+
+    stricter = deepcopy(load_rubric("assistant-reply"))
+    stricter.version = "2.1.0"
+    stricter.confidence_floors[stricter.stakes] = 0.99
+    monkeypatch.setattr(funnel, "load_rubric", lambda _rubric_id: stricter)
+
+    replayed = replay_judgment(saved_data, allow_version_drift=True)
+    gates = {gate.gate_id: gate for gate in replayed.deterministic_gates}
+
+    assert replayed.verdict == "review"
+    assert replayed.confidence_floor == pytest.approx(0.99)
+    assert [gate.gate_id for gate in replayed.deterministic_gates] == [
+        "state_projection",
+        "token_budget",
+        "injection_heuristic",
+        "answer_completeness",
+        "confidence_floor",
+    ]
+    assert all(
+        gates[gate_id].reason.startswith("historical evidence from original run: ")
+        for gate_id in ("state_projection", "token_budget", "injection_heuristic")
+    )
+    assert gates["answer_completeness"].outcome == "pass"
+    assert gates["confidence_floor"].outcome == "fail"
+    assert "below 0.99 floor (downgraded pass to review)" in gates["confidence_floor"].reason
+    assert "meets 0.50 floor" not in gates["confidence_floor"].reason
+
+    replayed_again = replay_judgment(replayed.to_dict())
+    assert [gate.reason for gate in replayed_again.deterministic_gates[:3]] == [
+        gate.reason for gate in replayed.deterministic_gates[:3]
+    ]
+
+
+def test_replay_recomputes_completeness_after_answers_change():
+    saved = run_judgment("assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True)
+    saved_data = saved.to_dict()
+    del saved_data["answers"]["screen.injection"]
+
+    replayed = replay_judgment(saved_data)
+    gates = {gate.gate_id: gate for gate in replayed.deterministic_gates}
+
+    assert replayed.verdict == "escalate"
+    assert gates["answer_completeness"].outcome == "fail"
+    assert "screen.injection" in gates["answer_completeness"].reason
+    assert gates["confidence_floor"].outcome == "skip"
+
+
+def test_replay_of_legacy_result_marks_unavailable_input_gates_as_skipped():
+    saved = run_judgment("assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True)
+    saved_data = saved.to_dict()
+    saved_data.pop("deterministic_gates")
+    saved_data.pop("state_projection")
+
+    replayed = replay_judgment(saved_data)
+
+    assert [gate.outcome for gate in replayed.deterministic_gates[:3]] == ["skip"] * 3
+    assert all(
+        "replay lacks raw state and historical" in gate.reason
+        for gate in replayed.deterministic_gates[:3]
+    )
+    assert replayed.deterministic_gates[3].gate_id == "answer_completeness"
+    assert replayed.deterministic_gates[3].outcome == "pass"
+
+    replayed_again = replay_judgment(replayed.to_dict())
+    assert replayed_again.deterministic_gates[:3] == replayed.deterministic_gates[:3]
 
 
 # --- recorded live-shape payload ----------------------------------------------

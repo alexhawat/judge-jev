@@ -312,6 +312,83 @@ fn replay_preserves_answers_and_verdict() {
 }
 
 #[test]
+fn replay_recomputes_answer_gates_and_labels_historical_evidence() {
+    let saved = run_judgment(
+        "assistant-reply",
+        &fixtures().join("assistant-reply-pass.json"),
+        true,
+    )
+    .expect("run");
+    let mut replay_input = saved.as_saved();
+    replay_input.answers.remove("screen.injection");
+
+    let replayed = replay_judgment(&replay_input, false).expect("replay");
+    let ids: Vec<&str> = replayed
+        .deterministic_gates
+        .iter()
+        .map(|gate| gate.gate_id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "state_projection",
+            "token_budget",
+            "injection_heuristic",
+            "answer_completeness",
+            "confidence_floor",
+        ]
+    );
+    assert!(replayed.deterministic_gates[..3].iter().all(|gate| gate
+        .reason
+        .starts_with("historical evidence from original run: ")));
+    let completeness = replayed
+        .deterministic_gates
+        .iter()
+        .find(|gate| gate.gate_id == "answer_completeness")
+        .expect("completeness gate");
+    assert_eq!(completeness.outcome, "fail");
+    assert!(completeness.reason.contains("screen.injection"));
+
+    let replayed_again = replay_judgment(&replayed.as_saved(), false).expect("second replay");
+    assert_eq!(
+        &replayed_again.deterministic_gates[..3],
+        &replayed.deterministic_gates[..3]
+    );
+}
+
+#[test]
+fn replay_of_legacy_result_skips_unavailable_input_gates() {
+    let saved = run_judgment(
+        "assistant-reply",
+        &fixtures().join("assistant-reply-pass.json"),
+        true,
+    )
+    .expect("run");
+    let mut replay_input = saved.as_saved();
+    replay_input.deterministic_gates.clear();
+    replay_input.state_projection = Default::default();
+
+    let replayed = replay_judgment(&replay_input, false).expect("replay");
+    assert!(replayed.deterministic_gates[..3].iter().all(|gate| {
+        gate.outcome == "skip"
+            && gate
+                .reason
+                .contains("replay lacks raw state and historical")
+    }));
+    assert_eq!(
+        replayed.deterministic_gates[3].gate_id,
+        "answer_completeness"
+    );
+    assert_eq!(replayed.deterministic_gates[3].outcome, "pass");
+
+    let replayed_again = replay_judgment(&replayed.as_saved(), false).expect("second replay");
+    assert_eq!(
+        &replayed_again.deterministic_gates[..3],
+        &replayed.deterministic_gates[..3]
+    );
+}
+
+#[test]
 fn recorded_live_answers_route_the_same_as_python() {
     // Real API answers carry `legend`; deserializing and routing must both accept it.
     let text = std::fs::read_to_string(

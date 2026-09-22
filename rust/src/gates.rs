@@ -29,7 +29,7 @@ fn python_json_string(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || (c as u32) > 0x7f => {
+            c if (c as u32) < 0x20 || (c as u32) >= 0x7f => {
                 let cp = c as u32;
                 if cp > 0xFFFF {
                     let v = cp - 0x10000;
@@ -168,9 +168,9 @@ pub struct GateContext<'a> {
     pub verdict: Option<&'a str>,
     pub confidence: Option<f64>,
     pub confidence_floor: f64,
+    pub confidence_candidate: Option<&'a str>,
     pub replay: bool,
     pub budget_ok: bool,
-    pub routing_reason: Option<&'a str>,
 }
 
 pub fn evaluate_gates(ctx: &GateContext<'_>) -> Vec<GateOutcome> {
@@ -195,9 +195,9 @@ pub fn evaluate_gates(ctx: &GateContext<'_>) -> Vec<GateOutcome> {
         outcomes.push(answer_completeness_gate(ctx.rubric, ctx.answers));
         outcomes.push(confidence_floor_gate(
             ctx.verdict,
+            ctx.confidence_candidate,
             ctx.confidence,
             ctx.confidence_floor,
-            ctx.routing_reason,
         ));
         return outcomes;
     }
@@ -241,11 +241,51 @@ pub fn evaluate_gates(ctx: &GateContext<'_>) -> Vec<GateOutcome> {
     outcomes.push(answer_completeness_gate(ctx.rubric, ctx.answers));
     outcomes.push(confidence_floor_gate(
         ctx.verdict,
+        ctx.confidence_candidate,
         ctx.confidence,
         ctx.confidence_floor,
-        ctx.routing_reason,
     ));
     outcomes
+}
+
+pub fn evaluate_replay_gates(
+    ctx: &GateContext<'_>,
+    historical_gates: &[GateOutcome],
+) -> Vec<GateOutcome> {
+    let mut current = evaluate_gates(ctx);
+    for (index, gate_id) in ["state_projection", "token_budget", "injection_heuristic"]
+        .iter()
+        .enumerate()
+    {
+        let unavailable_reason =
+            format!("replay lacks raw state and historical {gate_id} evidence");
+        current[index] = match historical_gates
+            .iter()
+            .find(|gate| gate.gate_id == *gate_id)
+        {
+            Some(historical)
+                if historical.reason != unavailable_reason
+                    && !historical.reason.starts_with("replay does not ") =>
+            {
+                let prefix = "historical evidence from original run: ";
+                let mut reason = historical.reason.as_str();
+                while let Some(stripped) = reason.strip_prefix(prefix) {
+                    reason = stripped;
+                }
+                GateOutcome {
+                    gate_id: historical.gate_id.clone(),
+                    outcome: historical.outcome.clone(),
+                    reason: format!("{prefix}{reason}"),
+                }
+            }
+            Some(_) | None => GateOutcome {
+                gate_id: (*gate_id).to_string(),
+                outcome: "skip".to_string(),
+                reason: unavailable_reason,
+            },
+        };
+    }
+    current
 }
 
 pub fn escalate_on_injection(
@@ -263,29 +303,6 @@ pub fn escalate_on_injection(
         "escalate".to_string(),
         format!("{reason} Injection heuristic failed; verdict escalated."),
     )
-}
-
-fn gated_subject(verdict: &str, routing_reason: Option<&str>) -> String {
-    let Some(reason) = routing_reason else {
-        return verdict.to_string();
-    };
-    let marker = "Downgraded from '";
-    let Some(index) = reason.rfind(marker) else {
-        return verdict.to_string();
-    };
-    let rest = &reason[index + marker.len()..];
-    let Some(end) = rest.find('\'') else {
-        return verdict.to_string();
-    };
-    if end == 0 {
-        return verdict.to_string();
-    }
-    let original = &rest[..end];
-    if GATED_VERDICTS.contains(&original) {
-        original.to_string()
-    } else {
-        verdict.to_string()
-    }
 }
 
 fn injection_heuristic_gate(filtered_state: Option<&Value>) -> GateOutcome {
@@ -354,9 +371,9 @@ fn answer_completeness_gate(
 
 fn confidence_floor_gate(
     verdict: Option<&str>,
+    confidence_candidate: Option<&str>,
     confidence: Option<f64>,
     floor: f64,
-    routing_reason: Option<&str>,
 ) -> GateOutcome {
     let (Some(verdict), Some(confidence)) = (verdict, confidence) else {
         return GateOutcome {
@@ -365,8 +382,8 @@ fn confidence_floor_gate(
             reason: "routing not complete".to_string(),
         };
     };
-    let subject = gated_subject(verdict, routing_reason);
-    if !GATED_VERDICTS.contains(&subject.as_str()) {
+    let subject = confidence_candidate.unwrap_or(verdict);
+    if !GATED_VERDICTS.contains(&subject) {
         return GateOutcome {
             gate_id: "confidence_floor".to_string(),
             outcome: "skip".to_string(),
@@ -379,7 +396,7 @@ fn confidence_floor_gate(
             outcome: "pass".to_string(),
             reason: format!("confidence {confidence:.2} meets {floor:.2} floor"),
         }
-    } else if subject != verdict {
+    } else if confidence_candidate.is_some() && verdict == "review" {
         GateOutcome {
             gate_id: "confidence_floor".to_string(),
             outcome: "fail".to_string(),
@@ -400,7 +417,8 @@ fn confidence_floor_gate(
 
 #[cfg(test)]
 mod tests {
-    use super::state_projection_hash;
+    use super::{state_filter_paths, state_projection_hash};
+    use crate::models::StatePath;
 
     #[test]
     fn projection_hash_matches_python_runtime() {
@@ -423,10 +441,58 @@ mod tests {
     }
 
     #[test]
-    fn projection_hash_escapes_non_ascii_like_python() {
+    fn projection_hash_escapes_paths_like_python() {
+        let vectors = [
+            (
+                vec!["café".to_string()],
+                "sha256:d9957358c680f7382fdf2e65ede7171846b650ebea7953d521837c3b16eed288",
+            ),
+            (
+                vec!["résumé".to_string()],
+                "sha256:c7e84dd64340d2a754bfa25062709546dd2b70396126660ffd7eed1c387b84df",
+            ),
+            (
+                vec!["emoji.😀".to_string()],
+                "sha256:12fdef3a76819ccbc0b8f6ea1c0d91d79db25eee67ab30ce15c4eb1d753a18a7",
+            ),
+            (
+                vec!["\u{007f}".to_string()],
+                "sha256:b10d448be414f5c5ccc0aa89a007547d37a76f46e1209f1147a63f7a6cb090ed",
+            ),
+            (
+                vec![
+                    "line\nfeed".to_string(),
+                    "quote\"path".to_string(),
+                    "slash\\path".to_string(),
+                ],
+                "sha256:bc0d131ca5c14a8ad6c0a5d27237d1c657b08347f995888706a5540737e74bbe",
+            ),
+        ];
+        for (paths, expected) in vectors {
+            assert_eq!(state_projection_hash(&paths), expected);
+        }
+    }
+
+    #[test]
+    fn projection_path_normalization_sorts_before_hashing() {
+        let paths = state_filter_paths(&[
+            StatePath {
+                path: "reply".to_string(),
+                required: false,
+            },
+            StatePath {
+                path: "context".to_string(),
+                required: false,
+            },
+            StatePath {
+                path: "prompt".to_string(),
+                required: false,
+            },
+        ]);
+        assert_eq!(paths, vec!["context", "prompt", "reply"]);
         assert_eq!(
-            state_projection_hash(&["café".to_string()]),
-            "sha256:d9957358c680f7382fdf2e65ede7171846b650ebea7953d521837c3b16eed288"
+            state_projection_hash(&paths),
+            "sha256:7d26c079d3169ddc395d6e9418adebd2c8ed8ef2936aa0ff5f170f1430ae265b"
         );
     }
 }

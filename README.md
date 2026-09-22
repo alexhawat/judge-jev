@@ -135,6 +135,12 @@ is downgraded to `review`. `review`, `escalate`, and `skip` are not gated.
 Every result includes `rubric_id`, `rubric_version`, resolved `model`, `state_projection`
 (allowlisted paths + hash + projected keys), and `deterministic_gates` (code-run gate
 outcomes). TypeSafe/API failures exit `10` and never emit a scored pass/fail verdict.
+The projection hash covers only the sorted allowlisted path names, serialized as
+compact JSON with non-ASCII code points escaped. It does not hash projected values
+or the rest of the rubric.
+On replay, answer completeness and the confidence floor are recomputed from the
+current answers and rubric. Input-only gates retain explicitly labeled historical
+evidence when it was saved; otherwise they are `skip` because raw state is unavailable.
 
 ### Optional tracing (Python)
 
