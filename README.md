@@ -110,16 +110,42 @@ Every request is built from one canonical serialization: keys sorted at every de
 compact separators, and `state` sent as exactly that text. Both runtimes must produce
 identical bytes, and `scripts/check-parity.sh` asserts it.
 
-### Confidence
+### Answer semantics (Noul, Score, confidence)
 
-`confidence` is the certainty of the answers the matched rule actually read
-(`deciding_answers`), taken as the **minimum** — one uncertain input holds the whole
-verdict back. Answers the rule did not read never inflate it. Noul carries no
-confidence of its own, so distance from 0.5 stands in for it.
+See [`docs/judgment-contracts.md`](docs/judgment-contracts.md) for the full contract.
 
-An automatic `pass` or `fail` whose confidence falls below the rubric's
-`confidence_floors[stakes]` is downgraded to `review`, with the reason recording why.
-`review`, `escalate`, and `skip` already defer to a human and are not gated.
+**Noul** values are `P(proposition yes)` on 0–1 — not a “% grounded” score. `0.5`
+means **uncertain**, not “medium”.
+
+**Score** answers are ordinal levels with API `legend`/`probabilities`; the number is
+the chosen level, not a continuous quality metric.
+
+**Verdict `confidence`** is the minimum over `deciding_answers` (answers the matched
+rule read). For noul answers, confidence is derived as distance from 0.5. It is **not**
+a probability that the verdict is correct. Answers the rule did not read never inflate it.
+
+A routing rule whose answer is **missing** escalates — it never falls through to a laxer
+rule or a silent pass.
+
+An automatic `pass` or `fail` whose confidence falls below `confidence_floors[stakes]`
+is downgraded to `review`. `review`, `escalate`, and `skip` are not gated.
+
+### JudgmentResult contract fields
+
+Every result includes `rubric_id`, `rubric_version`, resolved `model`, `state_projection`
+(allowlisted paths + hash + projected keys), and `deterministic_gates` (code-run gate
+outcomes). TypeSafe/API failures exit `10` and never emit a scored pass/fail verdict.
+
+### Optional tracing (Python)
+
+```bash
+(cd python && uv sync --extra tracing)
+export JUDGE_JEV_LOGFIRE_TOKEN=...          # region comes from the token
+./scripts/judge-jev run --rubric assistant-reply --input fixtures/assistant-reply-pass.json --mock --tracing
+```
+
+Default **off**. The write token selects the Logfire project. Missing the extra or
+token is a no-op. Rust accepts the same tracing flags as a no-op in v1.
 
 ## Layout
 
@@ -157,6 +183,8 @@ Set `JUDGE_JEV_RUNTIME=python|rust` or run setup interactively.
 | `TYPESAFE_API_KEY` | Required for live judging |
 | `JUDGE_JEV_TOKEN_BUDGET` | Ceiling, in estimated tokens, for one System One request (default `32000`). The estimate covers the filtered state and the rubric's questions together and is logged at INFO on every run. Exceeding it exits `10` before anything is sent, naming the largest contributing key. Must be a positive integer. |
 | `JUDGE_JEV_MAX_RETRIES` | Retries after the initial attempt on a 408, 429, 5xx, connection or timeout error (default `2`, matching `typesafe-sdk`). `0` disables retries. Both runtimes read it; backoff is 0.5s doubling to a 5s cap with jitter, under a 30s total budget per call. |
+| `JUDGE_JEV_LOGFIRE_TOKEN` | Optional Logfire write token (Python `[tracing]` extra). The token selects the project and region. |
+| `JUDGE_JEV_LOGFIRE_REGION` | Optional `eu` or `us` host override. Unset, the token's region is used. |
 
 ## Harness integration
 

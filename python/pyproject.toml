@@ -10,6 +10,11 @@ dependencies = [
     "typesafe-sdk>=0.7.0",
 ]
 
+[project.optional-dependencies]
+tracing = [
+    "logfire>=2.9.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

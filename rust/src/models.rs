@@ -28,6 +28,31 @@ pub struct Usage {
     pub output_tokens: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GateOutcome {
+    pub gate_id: String,
+    pub outcome: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StateProjection {
+    pub paths: Vec<String>,
+    pub hash: String,
+    pub projected_keys: Vec<String>,
+}
+
+impl Default for StateProjection {
+    fn default() -> Self {
+        StateProjection {
+            paths: Vec::new(),
+            hash: "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+                .to_string(),
+            projected_keys: Vec::new(),
+        }
+    }
+}
+
 /// Which build produced a result.
 ///
 /// Recorded because a verdict is only auditable against the code that reached it:
@@ -77,6 +102,10 @@ pub struct JudgmentResult {
     pub request_id: Option<String>,
     #[serde(default)]
     pub runtime: Runtime,
+    #[serde(default)]
+    pub state_projection: StateProjection,
+    #[serde(default)]
+    pub deterministic_gates: Vec<GateOutcome>,
 }
 
 /// Replay input: a previously saved judgment. Only `rubric_id` and `answers` are
@@ -98,6 +127,10 @@ pub struct SavedJudgment {
     pub mock: bool,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub state_projection: StateProjection,
+    #[serde(default)]
+    pub deterministic_gates: Vec<GateOutcome>,
 }
 
 impl JudgmentResult {
@@ -111,6 +144,8 @@ impl JudgmentResult {
             usage: self.usage.clone(),
             mock: self.mock,
             request_id: self.request_id.clone(),
+            state_projection: self.state_projection.clone(),
+            deterministic_gates: self.deterministic_gates.clone(),
         }
     }
 }

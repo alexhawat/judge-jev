@@ -21,6 +21,11 @@ jobs:
           cd python
           uv sync --locked --dev
           uv run pytest -q
+      - name: Test with optional tracing SDK
+        run: |
+          cd python
+          uv sync --locked --dev --extra tracing
+          uv run --extra tracing pytest tests/test_tracing.py -q
       - name: Smoke CLI (mock)
         run: |
           cd python

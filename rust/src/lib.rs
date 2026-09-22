@@ -1,6 +1,7 @@
 pub mod budget;
 pub mod canonical;
 pub mod funnel;
+pub mod gates;
 pub mod models;
 pub mod paths;
 pub mod retry;

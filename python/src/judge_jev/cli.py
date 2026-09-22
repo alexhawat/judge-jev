@@ -11,6 +11,7 @@ from typing import NoReturn
 from loguru import logger
 
 from judge_jev.funnel import read_input_text, replay_judgment, run_judgment
+from judge_jev.logfire_tracing import TracingConfig, configure_tracing
 from judge_jev.models import RUNTIME_NAME, RUNTIME_VERSION, RubricError
 from judge_jev.rubric import list_rubric_ids, show_rubric
 from judge_jev.setup_cmd import run_setup
@@ -18,7 +19,7 @@ from judge_jev.typesafe_client import JudgeJevError
 
 USAGE = """usage: judge-jev <setup|run|rubric|replay> ...
   setup
-  run    --rubric <id> --input <file.json|-> [--mock]
+  run    --rubric <id> --input <file.json|-> [--mock] [--tracing] [--tracing-to logfire]
   replay --input <result.json|-> [--allow-version-drift]
   rubric list | show --id <id>
   --version"""
@@ -48,8 +49,24 @@ def _exit_for_verdict(verdict: str) -> int:
     }.get(verdict, EXIT_REVIEW)
 
 
+def _tracing_active(args: argparse.Namespace) -> bool:
+    if not getattr(args, "tracing", False):
+        return False
+    try:
+        config = TracingConfig.from_cli(tracing=True, tracing_to=getattr(args, "tracing_to", None))
+        return configure_tracing(config)
+    except ValueError as err:
+        raise JudgeJevError(str(err)) from err
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    result = run_judgment(args.rubric, Path(args.input), mock=args.mock)
+    tracing_active = _tracing_active(args)
+    result = run_judgment(
+        args.rubric,
+        Path(args.input),
+        mock=args.mock,
+        tracing_active=tracing_active,
+    )
     print(json.dumps(result.to_dict(), indent=2))
     return _exit_for_verdict(result.verdict)
 
@@ -116,7 +133,7 @@ def _precheck(argv: list[str]) -> str | None:
     command, rest = argv[0], argv[1:]
     grammar: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         "setup": ((), ()),
-        "run": (("--rubric", "--input"), ("--mock",)),
+        "run": (("--rubric", "--input"), ("--mock", "--tracing")),
         "replay": (("--input",), ("--allow-version-drift",)),
     }
 
@@ -135,10 +152,20 @@ def _precheck(argv: list[str]) -> str | None:
     else:
         return f"unknown command: {command}"
 
+    optional_value_flags = ("--tracing-to",) if command == "run" else ()
     seen: set[str] = set()
     index = 0
     while index < len(rest):
         arg = rest[index]
+        if arg in optional_value_flags:
+            if arg in seen:
+                return f"{arg} given more than once"
+            seen.add(arg)
+            following = rest[index + 1] if index + 1 < len(rest) else None
+            if following is None or (following.startswith("-") and following != "-"):
+                return f"{arg} needs a value"
+            index += 2
+            continue
         if arg in value_flags:
             if arg in seen:
                 return f"{arg} given more than once"
@@ -175,6 +202,16 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--rubric", required=True)
     run_p.add_argument("--input", required=True)
     run_p.add_argument("--mock", action="store_true")
+    run_p.add_argument(
+        "--tracing",
+        action="store_true",
+        help="Enable optional Logfire tracing (Python runtime only; requires [tracing] extra and JUDGE_JEV_LOGFIRE_TOKEN)",
+    )
+    run_p.add_argument(
+        "--tracing-to",
+        default=None,
+        help="Tracing sink (default: logfire when --tracing is set)",
+    )
 
     replay_p = sub.add_parser("replay", help="Re-route from saved JudgmentResult JSON")
     replay_p.add_argument("--input", required=True)
