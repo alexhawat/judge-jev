@@ -1,3 +1,4 @@
+use crate::answers::validate_answers;
 use crate::budget::check_budget;
 use crate::canonical::CanonicalState;
 use crate::gates::{
@@ -58,6 +59,17 @@ pub fn load_input(path: &Path) -> Result<Value> {
     let text = read_input_text(path)?;
     let value: Value = serde_json::from_str(&text)
         .map_err(|e| anyhow!("input {} is not valid JSON: {e}", path.display()))?;
+    if !value.is_object() {
+        let kind = match &value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        anyhow::bail!("input {} must be a JSON object, got {kind}", path.display());
+    }
     Ok(value)
 }
 
@@ -93,9 +105,7 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
             client.system_one(&state, questions, &rubric.model)?;
         (answers, usage, request_id, model)
     };
-    if answers.is_empty() {
-        anyhow::bail!("system_one returned no answers");
-    }
+    validate_answers(&rubric, &answers)?;
 
     let routed = route_verdict(&rubric, &answers);
     let floor = rubric
@@ -170,6 +180,7 @@ pub fn version_drift(saved: &SavedJudgment, rubric_version: &str) -> Option<Stri
 
 pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Result<JudgmentResult> {
     let rubric = load_rubric(&saved.rubric_id)?;
+    validate_answers(&rubric, &saved.answers)?;
     let drift = version_drift(saved, &rubric.version);
     if let Some(message) = &drift {
         if !allow_version_drift {

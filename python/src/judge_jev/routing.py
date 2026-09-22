@@ -123,9 +123,33 @@ def route_verdict_with_candidate(
     escalates rather than being skipped. The final element is the automatic
     pass/fail candidate when the confidence floor downgraded it to review.
     """
+    missing = [answer_id for answer_id in rubric.questions if answer_id not in answers]
+    if missing:
+        return (
+            "escalate",
+            "Judgment response is incomplete; missing answers: " + ", ".join(sorted(missing)) + ".",
+            _stage_for(rubric, tuple(missing)),
+            [],
+            0.0,
+            None,
+        )
+
     for index, rule in enumerate(rubric.rules):
         if rule.default:
             # The catch-all decided nothing, so there is no confidence to report.
+            if rule.verdict in GATED_VERDICTS and 0.0 < rubric.confidence_floor:
+                return (
+                    "review",
+                    (
+                        f"{rule.reason} Downgraded from '{rule.verdict}': confidence "
+                        f"0.00 is below the {rubric.stakes} floor of "
+                        f"{rubric.confidence_floor:.2f}."
+                    ),
+                    "route",
+                    [],
+                    0.0,
+                    rule.verdict,
+                )
             return rule.verdict, rule.reason, "route", [], 0.0, None
 
         try:

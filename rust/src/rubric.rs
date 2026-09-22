@@ -7,6 +7,7 @@ use crate::models::{
     fields_for_type, is_text_field, stage_index, RoutingRule, Rubric, OPS, STAGE_ORDER, VERDICTS,
 };
 use crate::paths::rubrics_dir;
+use crate::state_filter::parse_path;
 use anyhow::{bail, Context, Result};
 use std::fs;
 
@@ -48,6 +49,16 @@ pub fn parse_rubric(text: &str) -> Result<Rubric> {
 fn validate(rubric: &Rubric) -> Result<()> {
     validate_questions(rubric)?;
 
+    for entry in &rubric.state_filter {
+        parse_path(&entry.path).with_context(|| format!("invalid state_filter path '{}'", entry.path))?;
+    }
+
+    for (name, floor) in &rubric.confidence_floors {
+        if !floor.is_finite() || !(0.0..=1.0).contains(floor) {
+            bail!("confidence_floors.{name} must be finite and between 0 and 1");
+        }
+    }
+
     if !rubric.confidence_floors.contains_key(&rubric.stakes) {
         let mut known: Vec<&String> = rubric.confidence_floors.keys().collect();
         known.sort();
@@ -79,8 +90,8 @@ fn validate_questions(rubric: &Rubric) -> Result<()> {
             );
         }
         match spec.qtype.as_str() {
-            "choice" if !spec.criteria.is_mapping() => {
-                bail!("questions.{name}: a choice question needs a criteria mapping")
+            "choice" if spec.criteria.as_mapping().is_none_or(|criteria| criteria.is_empty()) => {
+                bail!("questions.{name}: a choice question needs a non-empty criteria mapping")
             }
             "score" => match spec.criteria.as_sequence() {
                 Some(levels) if !levels.is_empty() => {}
@@ -188,12 +199,32 @@ fn validate_condition(
                 );
             }
         }
-    } else if condition.value.as_number().is_none() {
-        bail!(
-            "{where_}: field '{}' needs a numeric value, got '{}'",
-            condition.field,
-            condition.value.as_text()
-        );
+    } else {
+        let Some(value) = condition.value.as_number() else {
+            bail!(
+                "{where_}: field '{}' needs a numeric value, got '{}'",
+                condition.field,
+                condition.value.as_text()
+            );
+        };
+        if !value.is_finite() {
+            bail!("{where_}: numeric value must be finite");
+        }
+        if (condition.field == "noul" || condition.field == "confidence")
+            && !(0.0..=1.0).contains(&value)
+        {
+            bail!("{where_}: {} threshold must be between 0 and 1", condition.field);
+        }
+        if condition.field == "score" {
+            let highest = question
+                .criteria
+                .as_sequence()
+                .map(|levels| levels.len().saturating_sub(1))
+                .unwrap_or(0);
+            if value < 0.0 || value > highest as f64 {
+                bail!("{where_}: score threshold must be between 0 and {highest}");
+            }
+        }
     }
     Ok(())
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import yaml
@@ -112,12 +113,24 @@ def _validate_condition(condition: Condition, questions: dict[str, Any], where: 
                 f"'{condition.answer}'; expected one of {sorted(labels)}"
             )
     else:
+        if isinstance(condition.value, bool):
+            raise RubricError(
+                f"{where}: field {condition.field!r} needs a numeric value, got {condition.value!r}"
+            )
         try:
-            float(condition.value)
+            numeric = float(condition.value)
         except (TypeError, ValueError):
             raise RubricError(
                 f"{where}: field {condition.field!r} needs a numeric value, got {condition.value!r}"
             ) from None
+        if not math.isfinite(numeric):
+            raise RubricError(f"{where}: numeric value must be finite")
+        if condition.field in ("noul", "confidence") and not 0.0 <= numeric <= 1.0:
+            raise RubricError(f"{where}: {condition.field} threshold must be between 0 and 1")
+        if condition.field == "score":
+            highest = len(question.get("criteria") or []) - 1
+            if not 0.0 <= numeric <= highest:
+                raise RubricError(f"{where}: score threshold must be between 0 and {highest}")
 
 
 def _validate_questions(questions: Any) -> dict[str, dict[str, Any]]:
@@ -137,8 +150,8 @@ def _validate_questions(questions: Any) -> dict[str, dict[str, Any]]:
                 f"questions.{name}: stage must be one of {list(STAGE_ORDER)}, got {stage!r}"
             )
         criteria = spec.get("criteria")
-        if qtype == "choice" and not isinstance(criteria, dict):
-            raise RubricError(f"questions.{name}: a choice question needs a criteria mapping")
+        if qtype == "choice" and not (isinstance(criteria, dict) and criteria):
+            raise RubricError(f"questions.{name}: a choice question needs a non-empty criteria mapping")
         if qtype == "score" and not (isinstance(criteria, list) and criteria):
             raise RubricError(f"questions.{name}: a score question needs a non-empty criteria list")
     return questions
@@ -196,6 +209,21 @@ def load_rubric(rubric_id: str) -> Rubric:
 
     questions = _validate_questions(data.get("questions"))
     floors = data.get("confidence_floors", {}) or {}
+    if not isinstance(floors, dict):
+        raise RubricError(f"{rubric_id}: confidence_floors must be a mapping")
+    parsed_floors: dict[str, float] = {}
+    for name, value in floors.items():
+        if isinstance(value, bool):
+            raise RubricError(f"{rubric_id}: confidence_floors.{name} must be a number")
+        try:
+            floor = float(value)
+        except (TypeError, ValueError):
+            raise RubricError(f"{rubric_id}: confidence_floors.{name} must be a number") from None
+        if not math.isfinite(floor) or not 0.0 <= floor <= 1.0:
+            raise RubricError(
+                f"{rubric_id}: confidence_floors.{name} must be finite and between 0 and 1"
+            )
+        parsed_floors[str(name)] = floor
     stakes = str(data["stakes"])
     if stakes not in floors:
         raise RubricError(
@@ -212,7 +240,7 @@ def load_rubric(rubric_id: str) -> Rubric:
         description=str(data.get("description", "")),
         model=str(data["model"]),
         stakes=stakes,
-        confidence_floors={k: float(v) for k, v in floors.items()},
+        confidence_floors=parsed_floors,
         state_filter=_parse_state_filter(data.get("state_filter")),
         questions=questions,
         rules=rules,

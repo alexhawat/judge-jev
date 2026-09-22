@@ -22,19 +22,29 @@ $Root = Split-Path -Parent $PSScriptRoot
 $env:JUDGE_JEV_ROOT = $Root
 $RuntimeFile = Join-Path $Root ".judge-jev/runtime"
 
-if (Test-Path $RuntimeFile) {
-    $Runtime = (Get-Content -Raw $RuntimeFile).Trim()
-} elseif ($env:JUDGE_JEV_RUNTIME) {
+if ($env:JUDGE_JEV_RUNTIME) {
     $Runtime = $env:JUDGE_JEV_RUNTIME
+} elseif (Test-Path $RuntimeFile) {
+    $Runtime = (Get-Content -Raw $RuntimeFile).Trim()
 } else {
     $Runtime = "python"
 }
 
-Set-Location $Root
+$Guided = @("init", "doctor", "reply", "trajectory", "input", "explain", "history")
+if ($args.Count -gt 0 -and $Guided -contains $args[0]) { $Runtime = "python" }
 
 switch ($Runtime) {
     "python" {
-        uv run --directory (Join-Path $Root "python") judge-jev @args
+        if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+            Write-ErrLine "judge-jev: uv is required; run scripts/setup.ps1"
+            exit 10
+        }
+        $PyBin = if ($IsWindows) { Join-Path $Root "python/.venv/Scripts/judge-jev.exe" } else { Join-Path $Root "python/.venv/bin/judge-jev" }
+        if (-not (Test-Path $PyBin)) {
+            uv sync --project (Join-Path $Root "python") --locked
+            if ($LASTEXITCODE -ne 0) { exit 10 }
+        }
+        & $PyBin @args
         exit $LASTEXITCODE
     }
     "rust" {
@@ -45,23 +55,23 @@ switch ($Runtime) {
         $BinPlain = Join-Path $Root "rust/target/release/judge-jev"
         $Bin = if (Test-Path $BinExe) { $BinExe } elseif (Test-Path $BinPlain) { $BinPlain } else { $null }
 
-        if (-not $Bin) {
-            Push-Location (Join-Path $Root "rust")
-            cargo build --release
+        if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+            Write-ErrLine "judge-jev: cargo is required; run scripts/setup.ps1"
+            exit 10
+        }
+        cargo build --manifest-path (Join-Path $Root "rust/Cargo.toml") --release --quiet
             $buildExit = $LASTEXITCODE
-            Pop-Location
             if ($buildExit -ne 0) {
                 Write-ErrLine "cargo build --release failed (exit $buildExit)"
-                exit $buildExit
+                exit 10
             }
-            $Bin = if (Test-Path $BinExe) { $BinExe } else { $BinPlain }
-        }
+        $Bin = if (Test-Path $BinExe) { $BinExe } else { $BinPlain }
 
         & $Bin @args
         exit $LASTEXITCODE
     }
     default {
         Write-ErrLine "Unknown runtime '$Runtime'. Run scripts/setup.ps1 first."
-        exit 1
+        exit 10
     }
 }

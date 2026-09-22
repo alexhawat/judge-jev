@@ -26,31 +26,30 @@ if (-not $Runtime) {
     Write-Host "  1) python"
     Write-Host "  2) rust"
     $choice = Read-Host "Enter 1 or 2 [1]"
-    $Runtime = if ($choice -eq "2") { "rust" } else { "python" }
+    $Runtime = switch ($choice) { "" { "python" } "1" { "python" } "2" { "rust" } default { Write-ErrLine "Choose 1 or 2."; exit 11 } }
 }
-
-New-Item -ItemType Directory -Force -Path (Join-Path $Root ".judge-jev") | Out-Null
-Set-Content -Path (Join-Path $Root ".judge-jev/runtime") -Value $Runtime
 
 switch ($Runtime) {
     "python" {
         if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
             Write-ErrLine "uv required; see https://docs.astral.sh/uv/"
-            exit 1
+            exit 10
         }
         Push-Location (Join-Path $Root "python")
-        uv sync --dev
+        uv sync --locked --dev
         $exitCode = $LASTEXITCODE
         Pop-Location
         if ($exitCode -ne 0) {
             Write-ErrLine "uv sync --dev failed (exit $exitCode)"
-            exit $exitCode
+            exit 10
         }
+        & (Join-Path $Root "python/.venv/Scripts/judge-jev.exe") --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { exit 10 }
     }
     "rust" {
         if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
             Write-ErrLine "cargo required; install Rust toolchain"
-            exit 1
+            exit 10
         }
         Push-Location (Join-Path $Root "rust")
         cargo build --release
@@ -58,14 +57,22 @@ switch ($Runtime) {
         Pop-Location
         if ($exitCode -ne 0) {
             Write-ErrLine "cargo build --release failed (exit $exitCode)"
-            exit $exitCode
+            exit 10
         }
+        & (Join-Path $Root "rust/target/release/judge-jev.exe") --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { exit 10 }
     }
     default {
         Write-ErrLine "Unknown runtime: $Runtime (use python or rust)"
-        exit 1
+        exit 11
     }
 }
+
+$ConfigDir = Join-Path $Root ".judge-jev"
+New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+$TempRuntime = Join-Path $ConfigDir ("runtime.tmp." + [guid]::NewGuid().ToString("N"))
+Set-Content -Path $TempRuntime -Value $Runtime
+Move-Item -Force -Path $TempRuntime -Destination (Join-Path $ConfigDir "runtime")
 
 Write-Host "Configured runtime=$Runtime at $(Join-Path $Root '.judge-jev/runtime')"
 Write-Host "Export TYPESAFE_API_KEY for live mode, or pass --mock to judge-jev run."

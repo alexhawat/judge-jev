@@ -1,55 +1,75 @@
-# Claude Code adapter
+# Claude Code integration
 
-Thin wrapper around `./scripts/judge-jev` for Claude Code hooks.
+This is the primary, tested host integration. It evaluates one completed Claude
+Code turn at the `Stop` checkpoint. It is a retrospective quality gate: it can ask
+Claude to continue before the turn ends, but it cannot undo tool actions that
+already completed.
 
-## Install
+The implementation follows the official [Claude Code hooks reference](https://code.claude.com/docs/en/hooks),
+retrieved 22 September 2026. It reads Stop event JSON from stdin, uses
+`last_assistant_message`, checks `stop_hook_active`, and returns the documented
+top-level `decision: "block"` response. The installer uses exec-form commands with
+absolute paths, avoiding shell quoting and checkout-directory assumptions.
 
-1. Complete repo setup (`bash scripts/setup.sh`, or `pwsh scripts/setup.ps1` on Windows).
-2. Copy `hooks/claude-code/settings-snippet.json` into your Claude Code settings `hooks` section.
-3. Before a tool-heavy task, set `JUDGE_JEV_INPUT` to the trajectory JSON **itself**
-   (the `goal`, `steps`, `final_output` object) -- not a path. `--input -` reads
-   stdin, and the hook pipes `JUDGE_JEV_INPUT` straight into it, so there is no temp
-   file to write or clean up.
+## Preview, install, and remove
 
-## What the shipped hook does
-
-`hooks/claude-code/settings-snippet.json` judges the trajectory **live** after every
-tool use -- no `--mock` -- because a hook whose entire job is to gate real work has
-no business judging canned answers. It blocks only on `escalate`, by exiting `2` so
-Claude Code surfaces it; every other outcome is let through:
-
-| judge-jev exit | Verdict  | Hook behavior                                             |
-|-----------------|----------|------------------------------------------------------------|
-| 0               | pass     | let through                                                 |
-| 1               | fail     | let through (drop the `1)` arm from the `case` to block instead) |
-| 2               | review   | let through                                                 |
-| 3               | escalate | **blocked** -- hook exits 2                                 |
-| 4               | skip     | let through                                                 |
-| 10, 11          | not a verdict -- the judgment did not happen | let through, logged to stderr |
-
-Requires `TYPESAFE_API_KEY` in the environment the hook runs in.
-
-To smoke-test the wiring without a key or a real trajectory, call the CLI directly
-with `--mock`:
+Complete repository setup first. Preview the exact settings merge:
 
 ```bash
-echo '{"goal": "...", "steps": [], "final_output": "..."}' \
-  | ./scripts/judge-jev run --rubric agent-trajectory --input - --mock
+python3 hooks/claude-code/claude_code_hook.py preview \
+  --judge "$PWD/scripts/judge-jev"
 ```
 
-Mock answers are canned. That proves the plumbing works; it is never a real safety
-check, and the shipped hook itself never runs mocked.
-
-## Usage outside the hook
+Install into the default user settings file:
 
 ```bash
-./scripts/judge-jev run --rubric agent-trajectory --input path/to/trajectory.json
+python3 hooks/claude-code/claude_code_hook.py install \
+  --judge "$PWD/scripts/judge-jev"
 ```
 
-## Windows
+Use `--settings /path/to/temporary/settings.json` to inspect or test another
+file. The installer preserves unrelated settings and hooks, replaces only its own
+tagged entry, writes atomically, and backs up an existing file. Repository tests
+use temporary settings and never change the user's host configuration.
 
-```powershell
-pwsh scripts/judge-jev.ps1 run --rubric agent-trajectory --input path\to\trajectory.json
+Remove only the owned entry:
+
+```bash
+python3 hooks/claude-code/claude_code_hook.py uninstall \
+  --judge "$PWD/scripts/judge-jev"
 ```
 
-Same argument contract and exit codes as the bash dispatcher above.
+## Offline doctor check
+
+This uses the recorded Stop event and transcript plus `--mock`; it makes no model,
+host, settings, or telemetry call:
+
+```bash
+python3 hooks/claude-code/claude_code_hook.py doctor \
+  --event hooks/claude-code/fixtures/stop-event.json \
+  --judge "$PWD/scripts/judge-jev"
+```
+
+Mock output proves event normalization and CLI wiring only. Live hook execution
+requires `TYPESAFE_API_KEY` in Claude Code's environment.
+
+## Behavior
+
+The adapter reads the current user goal and tool uses/results from the event's
+session transcript, combines them with `last_assistant_message`, and submits the
+normalized `goal`, `steps`, `final_output` object to `agent-trajectory`.
+
+| judge-jev outcome | Stop response |
+|---|---|
+| pass or skip | allow the turn to stop |
+| fail, review, or escalate | block Stop once with the routing reason so Claude can respond |
+| operational/usage error | allow by default and log to stderr |
+
+When Claude invokes the hook again after hook feedback, `stop_hook_active` is true
+and the adapter allows Stop. This prevents recursive stop loops. Set
+`JUDGE_JEV_HOOK_FAILURE=closed` only when an unevaluated checkpoint should block;
+the default is explicit fail-open because an outage is not a verdict.
+
+The adapter does not create session-state files. Each event reads only its own
+absolute transcript path, concurrent sessions stay isolated, and validated session
+IDs are never interpolated into a filesystem path.

@@ -80,3 +80,11 @@ def test_canonical_state_carries_both_halves():
     assert state.text == '{"a":2,"b":1}'
     assert state.value["b"] == 1
     assert state.size == 13
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-(2**63) - 1, 2**63, 2**64 - 1, 2**64, 184467440737095516170000000000000001],
+)
+def test_large_integers_remain_exact(value):
+    assert canonical_json({"n": value}) == f'{{"n":{value}}}'

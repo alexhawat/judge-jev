@@ -1,4 +1,0 @@
-{
-  "description": "Cursor hook template: invoke judge-jev after tool use when JUDGE_JEV_AUTO=1. JUDGE_JEV_INPUT holds the trajectory JSON itself (not a path); the hook pipes it to `--input -`, so no temp file is needed. Exit 3 (escalate) is surfaced as a failure; 10/11 are operational errors and do not block. Add --mock only for smoke-testing the wiring, never as a real safety check.",
-  "command": "bash -lc 'set -o pipefail; ROOT=\"${CURSOR_PROJECT_DIR:-.}\"; [ \"${JUDGE_JEV_AUTO:-}\" = 1 ] || exit 0; printf %s \"$JUDGE_JEV_INPUT\" | \"$ROOT/scripts/judge-jev\" run --rubric agent-trajectory --input -; code=$?; case $code in 3) exit 1 ;; 10|11) echo \"judge-jev: could not judge (exit $code)\" >&2; exit 0 ;; *) exit 0 ;; esac'"
-}

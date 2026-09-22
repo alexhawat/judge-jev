@@ -36,10 +36,8 @@
 //! The API documents `state` as text, a JSON object, or an array, and sending the
 //! text is the only way byte-identity survives two encoders neither runtime owns.
 //!
-//! One divergence this cannot close: an integer literal too large for `i64`/`u64`
-//! is already an `f64` by the time it reaches here, because `serde_json` parses it
-//! that way, while Python keeps it exact. That is lost at parse time, not at
-//! serialization time, and no amount of canonical writing brings it back.
+//! `serde_json` is built with `arbitrary_precision`, so integer literals outside
+//! i64/u64 remain exact decimal text. This matches Python's unbounded JSON ints.
 
 use anyhow::{bail, Result};
 use serde_json::{Map, Value};
@@ -153,6 +151,10 @@ fn format_number(n: &serde_json::Number) -> Result<String> {
     }
     if let Some(u) = n.as_u64() {
         return Ok(u.to_string());
+    }
+    let exact = n.to_string();
+    if !exact.contains(['.', 'e', 'E']) {
+        return Ok(exact);
     }
     let Some(f) = n.as_f64() else {
         bail!("number {n} cannot be represented canonically");
@@ -293,5 +295,19 @@ mod tests {
         assert_eq!(state.text, r#"{"a":2,"b":1}"#);
         assert_eq!(state.value["b"], json!(1));
         assert_eq!(state.size(), 13);
+    }
+
+    #[test]
+    fn arbitrary_size_integers_remain_exact() {
+        for raw in [
+            "-9223372036854775809",
+            "9223372036854775808",
+            "18446744073709551615",
+            "18446744073709551616",
+            "184467440737095516170000000000000001",
+        ] {
+            let value: Value = serde_json::from_str(raw).unwrap();
+            assert_eq!(canonical_json(&value).unwrap(), raw);
+        }
     }
 }

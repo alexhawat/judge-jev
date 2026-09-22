@@ -150,7 +150,7 @@ impl JudgmentResult {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum Answer {
     #[serde(rename = "noul")]
@@ -171,6 +171,73 @@ pub enum Answer {
         legend: Option<HashMap<String, serde_json::Value>>,
         probabilities: HashMap<String, f64>,
     },
+}
+
+impl<'de> Deserialize<'de> for Answer {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| D::Error::custom("answer must be an object"))?;
+        let kind = object
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| D::Error::custom("answer.type must be a string"))?;
+        let number = |field: &str| {
+            object
+                .get(field)
+                .and_then(serde_json::Value::as_f64)
+                .ok_or_else(|| D::Error::custom(format!("answer.{field} must be a number")))
+        };
+        let probabilities = || -> Result<HashMap<String, f64>, D::Error> {
+            object
+                .get("probabilities")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| D::Error::custom("answer.probabilities must be an object"))?
+                .iter()
+                .map(|(key, value)| {
+                    value
+                        .as_f64()
+                        .map(|number| (key.clone(), number))
+                        .ok_or_else(|| D::Error::custom("answer probability must be a number"))
+                })
+                .collect()
+        };
+        match kind {
+            "noul" => Ok(Answer::Noul {
+                noul: number("noul")?,
+            }),
+            "choice" => Ok(Answer::Choice {
+                choice: object
+                    .get("choice")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| D::Error::custom("answer.choice must be a string"))?
+                    .to_string(),
+                confidence: number("confidence")?,
+                probabilities: probabilities()?,
+            }),
+            "score" => {
+                let legend = object.get("legend").map(|raw| {
+                    raw.as_object()
+                        .ok_or_else(|| D::Error::custom("answer.legend must be an object"))
+                        .map(|mapping| {
+                            mapping
+                                .iter()
+                                .map(|(key, value)| (key.clone(), value.clone()))
+                                .collect()
+                        })
+                }).transpose()?;
+                Ok(Answer::Score {
+                    score: number("score")?,
+                    confidence: number("confidence")?,
+                    legend,
+                    probabilities: probabilities()?,
+                })
+            }
+            other => Err(D::Error::custom(format!("unknown answer type '{other}'"))),
+        }
+    }
 }
 
 /// A single field read off an answer by a routing condition.

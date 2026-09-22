@@ -77,9 +77,46 @@ pub fn decision_confidence(answers: &HashMap<String, Answer>, deciding: &[String
 /// The first rule whose conditions all hold wins. A rule that cannot be evaluated
 /// escalates rather than being skipped.
 pub fn route_verdict(rubric: &Rubric, answers: &HashMap<String, Answer>) -> Routed {
+    let mut missing: Vec<String> = rubric
+        .questions
+        .keys()
+        .filter(|answer_id| !answers.contains_key(*answer_id))
+        .cloned()
+        .collect();
+    missing.sort();
+    if !missing.is_empty() {
+        return Routed {
+            verdict: "escalate".to_string(),
+            reason: format!(
+                "Judgment response is incomplete; missing answers: {}.",
+                missing.join(", ")
+            ),
+            stage: stage_for(rubric, &missing),
+            deciding: Vec::new(),
+            confidence: 0.0,
+            confidence_candidate: None,
+        };
+    }
+
     for rule in &rubric.routing.rules {
         if rule.default {
             // The catch-all decided nothing, so there is no confidence to report.
+            if GATED_VERDICTS.contains(&rule.verdict.as_str()) && rubric.confidence_floor() > 0.0 {
+                return Routed {
+                    verdict: "review".to_string(),
+                    reason: format!(
+                        "{} Downgraded from '{}': confidence 0.00 is below the {} floor of {:.2}.",
+                        rule.reason,
+                        rule.verdict,
+                        rubric.stakes,
+                        rubric.confidence_floor()
+                    ),
+                    stage: "route".to_string(),
+                    deciding: Vec::new(),
+                    confidence: 0.0,
+                    confidence_candidate: Some(rule.verdict.clone()),
+                };
+            }
             return Routed {
                 verdict: rule.verdict.clone(),
                 reason: rule.reason.clone(),

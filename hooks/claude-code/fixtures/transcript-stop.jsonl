@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Inspect the README and report its first heading."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"README.md"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read","content":"# judge-jev\n\nJev-native judge kit."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The first heading is judge-jev."}]}}

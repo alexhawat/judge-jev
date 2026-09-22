@@ -5,27 +5,45 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export JUDGE_JEV_ROOT="$ROOT"
 RUNTIME_FILE="$ROOT/.judge-jev/runtime"
 
-if [[ -f "$RUNTIME_FILE" ]]; then
+if [[ -n "${JUDGE_JEV_RUNTIME:-}" ]]; then
+  RUNTIME="$JUDGE_JEV_RUNTIME"
+elif [[ -f "$RUNTIME_FILE" ]]; then
   RUNTIME="$(tr -d '[:space:]' < "$RUNTIME_FILE")"
 else
-  RUNTIME="${JUDGE_JEV_RUNTIME:-python}"
+  RUNTIME=python
 fi
 
-cd "$ROOT"
+# Human-facing commands live in the recommended Python frontend even when Rust is
+# selected for machine `run`/`replay` calls.
+case "${1:-}" in
+  init|doctor|reply|trajectory|input|explain|history) RUNTIME=python ;;
+esac
 
 case "$RUNTIME" in
   python)
-    exec uv run --directory "$ROOT/python" judge-jev "$@"
+    command -v uv >/dev/null || { echo "judge-jev: uv is required; run scripts/setup.sh" >&2; exit 10; }
+    PY_BIN="$ROOT/python/.venv/bin/judge-jev"
+    if [[ ! -x "$PY_BIN" ]]; then
+      set +e
+      uv sync --project "$ROOT/python" --locked >&2
+      prep=$?
+      set -e
+      [[ "$prep" == 0 ]] || exit 10
+    fi
+    exec "$PY_BIN" "$@"
     ;;
   rust)
     BIN="$ROOT/rust/target/release/judge-jev"
-    if [[ ! -x "$BIN" ]]; then
-      (cd "$ROOT/rust" && cargo build --release)
-    fi
+    command -v cargo >/dev/null || { echo "judge-jev: cargo is required; run scripts/setup.sh" >&2; exit 10; }
+    set +e
+    cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release --quiet >&2
+    prep=$?
+    set -e
+    [[ "$prep" == 0 ]] || exit 10
     exec "$BIN" "$@"
     ;;
   *)
     echo "Unknown runtime '$RUNTIME'. Run scripts/setup.sh first." >&2
-    exit 1
+    exit 10
     ;;
 esac

@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from judge_jev.answers import validate_answers
 from judge_jev.budget import check_budget
 from judge_jev.canonical import CanonicalState
 from judge_jev.gates import (
@@ -147,8 +148,7 @@ def run_judgment(
                 raise
             except Exception as err:  # noqa: BLE001 - API/engine failures must not become verdicts.
                 raise JudgeJevError(f"system_one failed: {err}") from err
-            if not answers:
-                raise JudgeJevError("system_one returned no answers")
+            validate_answers(rubric, answers)
 
         verdict, reason, stage, deciding, confidence, confidence_candidate = (
             route_verdict_with_candidate(rubric, answers)
@@ -239,7 +239,7 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
     if drift is not None and not allow_version_drift:
         raise JudgeJevError(f"{drift}; re-run with --allow-version-drift to route it anyway")
 
-    answers = saved["answers"]
+    answers = validate_answers(rubric, saved["answers"])
     verdict, reason, stage, deciding, confidence, confidence_candidate = (
         route_verdict_with_candidate(rubric, answers)
     )
