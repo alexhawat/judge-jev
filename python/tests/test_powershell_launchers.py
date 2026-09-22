@@ -117,3 +117,30 @@ def test_powershell_selection_exit_passthrough_and_setup_rollback(tmp_path: Path
     broken_env["JUDGE_JEV_RUNTIME"] = "python"
     broken_env["PATH"] = f"{broken_tools}{os.pathsep}{broken_env['PATH']}"
     assert invoke(broken_root / "scripts/judge-jev.ps1", broken_root, broken_env, "run").returncode == 10
+
+
+def test_powershell_launcher_resolves_python_binary_after_fresh_sync(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("cmd launcher fixtures require Windows")
+    root, tools = windows_root(tmp_path)
+    target = root / "python/.venv/Scripts/judge-jev.cmd"
+    target.unlink()
+    seed = tmp_path / "fresh-judge.cmd"
+    write_cmd(seed, "python")
+    (tools / "uv.cmd").write_text(
+        "@echo off\r\n"
+        "mkdir \"%FAKE_BOOTSTRAP_DIR%\" 2>nul\r\n"
+        "copy /Y \"%FAKE_BOOTSTRAP_SOURCE%\" \"%FAKE_BOOTSTRAP_TARGET%\" >nul\r\n"
+        "exit /b %ERRORLEVEL%\r\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["JUDGE_JEV_RUNTIME"] = "python"
+    env["PATH"] = f"{tools}{os.pathsep}{env['PATH']}"
+    env["FAKE_LOG"] = str(tmp_path / "fresh-invocation")
+    env["FAKE_BOOTSTRAP_DIR"] = str(target.parent)
+    env["FAKE_BOOTSTRAP_SOURCE"] = str(seed)
+    env["FAKE_BOOTSTRAP_TARGET"] = str(target)
+    result = invoke(root / "scripts/judge-jev.ps1", root, env, "run")
+    assert result.returncode == 0, result.stderr
+    assert Path(env["FAKE_LOG"] + ".runtime").read_text().strip() == "python"

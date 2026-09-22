@@ -53,14 +53,16 @@ switch ($Runtime) {
             Write-ErrLine "judge-jev: uv is required; run scripts/setup.ps1"
             exit 10
         }
-        $PyBinExe = Join-Path $Root "python/.venv/Scripts/judge-jev.exe"
-        $PyBinCmd = Join-Path $Root "python/.venv/Scripts/judge-jev.cmd"
-        $PyBinPlain = Join-Path $Root "python/.venv/bin/judge-jev"
-        $PyBin = if (Test-Path $PyBinExe) { $PyBinExe } elseif (Test-Path $PyBinCmd) { $PyBinCmd } else { $PyBinPlain }
         # Always reconcile with the lock; an existing executable does not prove
         # dependencies still match this checkout.
         uv sync --project (Join-Path $Root "python") --locked --extra tracing --quiet
         if ($LASTEXITCODE -ne 0) { exit 10 }
+        # Resolve after sync: on a fresh Windows checkout the executable did not
+        # exist before uv created .venv/Scripts.
+        $PyBinExe = Join-Path $Root "python/.venv/Scripts/judge-jev.exe"
+        $PyBinCmd = Join-Path $Root "python/.venv/Scripts/judge-jev.cmd"
+        $PyBinPlain = Join-Path $Root "python/.venv/bin/judge-jev"
+        $PyBin = if (Test-Path $PyBinExe) { $PyBinExe } elseif (Test-Path $PyBinCmd) { $PyBinCmd } else { $PyBinPlain }
         if (-not (Test-Path $PyBin)) {
             Write-ErrLine "judge-jev: Python bootstrap did not install $PyBin"
             exit 10
