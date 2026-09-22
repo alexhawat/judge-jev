@@ -289,6 +289,11 @@ def doctor_report() -> dict[str, Any]:
             environment.setdefault(
                 "UV_CACHE_DIR", str(Path(tempfile.gettempdir()) / "judge-jev-uv-cache")
             )
+            # `doctor` promises an offline diagnostic. Public launchers still
+            # reconcile dependencies, so force both package managers to use only
+            # their local caches; a cold cache is reported as smoke unavailable.
+            environment["UV_OFFLINE"] = "1"
+            environment["CARGO_NET_OFFLINE"] = "true"
             completed = subprocess.run(  # noqa: S603 - fixed repository scripts.
                 [sys.executable, str(root / "hooks/claude-code/claude_code_hook.py"), "doctor", "--event", str(claude_fixture), "--judge", str(_public_launcher(root))],
                 capture_output=True,

@@ -11,7 +11,7 @@ import pytest
 
 from judge_jev.cli import EXIT_USAGE, main
 from judge_jev.history import delete_all, list_entries, save_result
-from judge_jev.guided import GuidedUsageError, _multiline, _public_launcher
+from judge_jev.guided import GuidedUsageError, _multiline, _public_launcher, doctor_report
 
 
 def test_no_args_non_tty_is_usage_without_prompt(capsys) -> None:
@@ -167,6 +167,28 @@ def test_doctor_is_offline_and_key_presence_only(monkeypatch, capsys) -> None:
     assert report["typesafe_api_key_present"] is True
     assert report["network_used"] is False
     assert report["offline_smoke"]["passed"] is True
+
+
+def test_doctor_forces_launcher_dependency_checks_offline(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/setup.sh").write_text("#!/bin/sh\n")
+    fixture = tmp_path / "hooks/claude-code/fixtures/stop-event.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text("{}")
+    (tmp_path / "hooks/claude-code/claude_code_hook.py").write_text("# fixture\n")
+    captured: dict[str, str] = {}
+
+    def fake_run(*_args, **kwargs):
+        captured.update(kwargs["env"])
+        payload = {"result": {"verdict": "review"}, "host_response": {"decision": "block"}}
+        return subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+
+    monkeypatch.setattr("judge_jev.guided.repo_root", lambda: tmp_path)
+    monkeypatch.setattr("judge_jev.guided.subprocess.run", fake_run)
+    report = doctor_report()
+    assert report["offline_smoke"]["passed"] is True
+    assert captured["UV_OFFLINE"] == "1"
+    assert captured["CARGO_NET_OFFLINE"] == "true"
 
 
 def test_replay_human_output_says_no_new_api_call(tmp_path: Path, capsys) -> None:

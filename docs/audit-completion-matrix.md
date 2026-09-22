@@ -68,7 +68,7 @@ Python dependency freshness after lockfile changes was an additional review corr
 At checkpoint `35d629b`: 259 Python tests passed, one local PowerShell test
 skipped; Rust 47 unit + 32 integration + 4 policy + 2 standalone tests passed;
 Rust fmt/clippy, full runtime parity, both runtime example suites and adapter-doc
-checks passed. After final review corrections, the local suites report 279 Python
+checks passed. After final review corrections, the local suites report 280 Python
 tests passed with two PowerShell-only tests skipped, and Rust 47 unit + 34
 integration + 4 policy + 3 standalone tests passed. Rust fmt/clippy, package asset
 checks, pipeline tests, adapter documentation checks, both example suites, and the
