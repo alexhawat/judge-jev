@@ -279,24 +279,6 @@ fn answer_completeness_gate(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::state_projection_hash;
-
-    #[test]
-    fn projection_hash_matches_python_runtime() {
-        let paths = vec![
-            "context".to_string(),
-            "prompt".to_string(),
-            "reply".to_string(),
-        ];
-        assert_eq!(
-            state_projection_hash(&paths),
-            "sha256:7d26c079d3169ddc395d6e9418adebd2c8ed8ef2936aa0ff5f170f1430ae265b"
-        );
-    }
-}
-
 fn confidence_floor_gate(
     verdict: Option<&str>,
     confidence: Option<f64>,
@@ -330,5 +312,23 @@ fn confidence_floor_gate(
                 "confidence {confidence:.2} below {floor:.2} floor (verdict may downgrade to review)"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::state_projection_hash;
+
+    #[test]
+    fn projection_hash_matches_python_runtime() {
+        let paths = vec![
+            "context".to_string(),
+            "prompt".to_string(),
+            "reply".to_string(),
+        ];
+        assert_eq!(
+            state_projection_hash(&paths),
+            "sha256:7d26c079d3169ddc395d6e9418adebd2c8ed8ef2936aa0ff5f170f1430ae265b"
+        );
     }
 }
