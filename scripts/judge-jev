@@ -27,7 +27,7 @@ for arg in "$@"; do
   [[ -n "$COMMAND" ]] || COMMAND="$arg"
 done
 case "$COMMAND" in
-  init|doctor|reply|trajectory|input|explain|history) RUNTIME=python ;;
+  init|doctor|reply|trajectory|input|explain|history|tune) RUNTIME=python ;;
 esac
 if [[ $# -eq 0 && -t 0 ]]; then
   RUNTIME=python
@@ -39,8 +39,14 @@ case "$RUNTIME" in
     PY_BIN="$ROOT/python/.venv/bin/judge-jev"
     # Always reconcile the environment with the lock. uv no-ops when it is fresh;
     # checking only for an old executable leaves stale dependencies after checkout.
+    SYNC_ARGS=(sync --project "$ROOT/python" --locked --inexact --quiet)
+    if [[ "$COMMAND" == "tune" ]]; then
+      for arg in "$@"; do
+        [[ "$arg" == "--live" ]] && SYNC_ARGS+=(--extra tuning)
+      done
+    fi
     set +e
-    uv sync --project "$ROOT/python" --locked --inexact --quiet >&2
+    uv "${SYNC_ARGS[@]}" >&2
     prep=$?
     set -e
     [[ "$prep" == 0 ]] || exit 10

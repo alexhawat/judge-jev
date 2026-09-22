@@ -151,6 +151,27 @@ def test_instruction_dry_run_imports_no_gepa_and_calls_no_model(tmp_path: Path) 
     assert report["preserved"]["question_type"] == "score"
 
 
+def test_instruction_corpus_refuses_other_rubric_before_evaluator(tmp_path: Path) -> None:
+    cases = tmp_path / "cases.jsonl"
+    _cases(cases)
+    rows = [json.loads(line) for line in cases.read_text().splitlines()]
+    rows[0]["rubric_id"] = "agent-trajectory"
+    cases.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(JudgeJevError, match="another rubric"):
+        instruction_proposal(
+            "assistant-reply",
+            "score.helpfulness",
+            cases,
+            live=True,
+            budget_mode="calls",
+            metric_budget=60,
+            reflection_call_budget=1,
+            reflection_model=lambda _prompt: "unused",
+            minimum_support=1,
+            evaluator=lambda *_args: pytest.fail("evaluator must not run"),
+        )
+
+
 def test_unsupported_hard_spend_mode_refuses_before_any_model_call(tmp_path: Path) -> None:
     cases = tmp_path / "cases.jsonl"
     _cases(cases)

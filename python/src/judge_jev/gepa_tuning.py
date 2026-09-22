@@ -447,8 +447,8 @@ def _live_evaluator(
         return output
 
     # Neither verified Jev provider currently exposes a request-level hard output
-    # token bound. instruction_proposal checks this marker and refuses paid live
-    # optimization before making a request.
+    # token bound. Strict hard-spend mode refuses before a request; explicit
+    # call-count mode instead uses hard request counters and reports usage.
     evaluate.hard_token_limit = None  # type: ignore[attr-defined]
     return evaluate
 
@@ -504,6 +504,11 @@ def instruction_proposal(
         rows = validate_cases(read_jsonl(cases_path))
     except (ValueError, OSError) as err:
         raise JudgeJevError(str(err)) from err
+    mismatched = [row["id"] for row in rows if row["rubric_id"] != rubric_id]
+    if mismatched:
+        raise JudgeJevError(
+            f"instruction corpus contains cases for another rubric: {sorted(mismatched)}"
+        )
     policy = load_cost_policy()
     validate_support(rows, policy.get("required_classes", []), minimum_support)
     train = [row for row in rows if row["split"] == "train"]

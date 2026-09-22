@@ -187,5 +187,7 @@ opt-in, atomic, corruption-recovering, bounded, and restricted to owned cache fi
 
 GEPA emits bounded candidate reports with all three split metrics, its internal
 training frontier, proposed version bumps, and unified diffs. Its train-selected
-candidate is identified, but no winner is silently applied. It never edits the rubric. No
+candidate is identified, but no winner is silently applied. Internal-frontier items
+outside the configured gate-candidate bound are explicitly training-only evidence;
+they have not passed independent split gates. It never edits the rubric. No
 paid optimization was run to validate this implementation.
