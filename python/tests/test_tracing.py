@@ -20,8 +20,9 @@ def test_configure_tracing_uses_supported_token_configuration(monkeypatch, regio
 
     # Explicit keywords prevent an unsupported SDK argument from going unnoticed.
     def configure(*, token, service_name, service_version, environment,
-                  send_to_logfire, console, advanced):
-        calls.append((token, service_name, send_to_logfire, console, advanced.base_url))
+                  send_to_logfire, console, advanced=None):
+        base_url = None if advanced is None else advanced.base_url
+        calls.append((token, service_name, send_to_logfire, console, base_url))
 
     monkeypatch.setitem(sys.modules, "logfire", SimpleNamespace(
         configure=configure, AdvancedOptions=SimpleNamespace,
@@ -32,6 +33,29 @@ def test_configure_tracing_uses_supported_token_configuration(monkeypatch, regio
     assert configure_tracing(TracingConfig(enabled=True, sink="logfire"))
     assert calls == [("test-write-token", "judge-jev", True, False,
                       f"https://logfire-{region}.pydantic.dev")]
+
+
+def test_unset_region_does_not_override_the_token_host(monkeypatch):
+    calls = []
+
+    def configure(*, token, service_name, service_version, environment,
+                  send_to_logfire, console, advanced=None):
+        calls.append(advanced)
+
+    monkeypatch.setitem(sys.modules, "logfire", SimpleNamespace(
+        configure=configure, AdvancedOptions=SimpleNamespace,
+    ))
+    monkeypatch.setenv("JUDGE_JEV_LOGFIRE_TOKEN", "test-write-token")
+    monkeypatch.delenv("JUDGE_JEV_LOGFIRE_REGION", raising=False)
+    assert configure_tracing(TracingConfig(enabled=True, sink="logfire"))
+    assert calls == [None]
+
+
+def test_unknown_region_is_rejected(monkeypatch):
+    monkeypatch.setenv("JUDGE_JEV_LOGFIRE_TOKEN", "test-write-token")
+    monkeypatch.setenv("JUDGE_JEV_LOGFIRE_REGION", "europe")
+    with pytest.raises(ValueError, match="JUDGE_JEV_LOGFIRE_REGION"):
+        configure_tracing(TracingConfig(enabled=True, sink="logfire"))
 
 
 def test_missing_sdk_with_token_is_noop(monkeypatch):

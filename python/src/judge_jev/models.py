@@ -139,7 +139,7 @@ class JudgmentResult:
     runtime: Runtime = field(default_factory=lambda: Runtime("python", RUNTIME_VERSION))
     # Paths from the rubric state_filter and a stable hash of that allowlist.
     state_projection: StateProjection = field(
-        default_factory=lambda: StateProjection([], "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", [])
+        default_factory=lambda: StateProjection([], "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", [])
     )
     # Deterministic checks run in code (not Jev). Always present, even when stubbed.
     deterministic_gates: list[GateOutcome] = field(default_factory=list)

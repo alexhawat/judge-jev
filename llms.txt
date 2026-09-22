@@ -24,7 +24,7 @@ Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
 
 - `shared/rubrics/` — YAML question packs + routing rules (assistant-reply, agent-trajectory)
 - `shared/schemas/` — JSON Schema for JudgmentResult and rubrics
-- `python/` — uv project, loguru, typesafe-sdk client; optional `[tracing]` extra (Logfire EU)
+- `python/` — uv project, loguru, typesafe-sdk client; optional `[tracing]` extra (Logfire; region from the token)
 - `docs/judgment-contracts.md` — Noul/Score/confidence + result contract
 - `rust/` — cargo crate, tracing, minreq HTTP client (`POST /v1/systemone`)
 - `skills/judge-jev/SKILL.md` — agent skill
@@ -48,7 +48,7 @@ Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
 - JudgmentResult always carries state_projection + deterministic_gates.
 - TypeSafe/API failure → exit 10, never a scored pass/fail.
 - Arithmetic/threshold enforcement stays in code, not in Jev prompts.
-- Untrusted PR/ticket/user content: fail-closed on injection signals.
+- Untrusted PR/ticket/user content: fail-closed on injection signals. A failed `injection_heuristic` gate escalates.
 
 ## TypeSafe HTTP (Rust mirrors typesafe-sdk Python)
 

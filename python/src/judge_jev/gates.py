@@ -55,6 +55,8 @@ class GateContext:
     confidence_floor: float
     replay: bool = False
     budget_ok: bool = True
+    # Routing reason, so a floor downgrade can be recorded against the matched rule.
+    routing_reason: str | None = None
 
 
 def evaluate_gates(ctx: GateContext) -> list[GateOutcome]:
@@ -71,6 +73,7 @@ def evaluate_gates(ctx: GateContext) -> list[GateOutcome]:
                 ctx.verdict,
                 ctx.confidence,
                 ctx.confidence_floor,
+                ctx.routing_reason,
             )
         )
         return outcomes
@@ -99,6 +102,7 @@ def evaluate_gates(ctx: GateContext) -> list[GateOutcome]:
             ctx.verdict,
             ctx.confidence,
             ctx.confidence_floor,
+            ctx.routing_reason,
         )
     )
     return outcomes
@@ -135,14 +139,42 @@ def _answer_completeness_gate(
     return GateOutcome("answer_completeness", "pass", f"all {len(expected)} questions answered")
 
 
+def escalate_on_injection(verdict: str, reason: str, gates: list[GateOutcome]) -> tuple[str, str]:
+    """Force escalate when the injection heuristic failed and routing did not."""
+    failed = any(gate.gate_id == "injection_heuristic" and gate.outcome == "fail" for gate in gates)
+    if not failed or verdict == "escalate":
+        return verdict, reason
+    return "escalate", f"{reason} Injection heuristic failed; verdict escalated."
+
+
+def _gated_subject(verdict: str, routing_reason: str | None) -> str:
+    """The rule verdict the floor applies to, before a downgrade rewrites it to review."""
+    if not routing_reason:
+        return verdict
+    marker = "Downgraded from '"
+    index = routing_reason.rfind(marker)
+    if index == -1:
+        return verdict
+    rest = routing_reason[index + len(marker) :]
+    end = rest.find("'")
+    if end <= 0:
+        return verdict
+    original = rest[:end]
+    if original in GATED_VERDICTS:
+        return original
+    return verdict
+
+
 def _confidence_floor_gate(
     verdict: str | None,
     confidence: float | None,
     floor: float,
+    routing_reason: str | None = None,
 ) -> GateOutcome:
     if verdict is None or confidence is None:
         return GateOutcome("confidence_floor", "skip", "routing not complete")
-    if verdict not in GATED_VERDICTS:
+    subject = _gated_subject(verdict, routing_reason)
+    if subject not in GATED_VERDICTS:
         return GateOutcome(
             "confidence_floor",
             "skip",
@@ -153,6 +185,12 @@ def _confidence_floor_gate(
             "confidence_floor",
             "pass",
             f"confidence {confidence:.2f} meets {floor:.2f} floor",
+        )
+    if subject != verdict:
+        return GateOutcome(
+            "confidence_floor",
+            "fail",
+            f"confidence {confidence:.2f} below {floor:.2f} floor (downgraded {subject} to review)",
         )
     return GateOutcome(
         "confidence_floor",

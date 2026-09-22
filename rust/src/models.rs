@@ -46,7 +46,7 @@ impl Default for StateProjection {
     fn default() -> Self {
         StateProjection {
             paths: Vec::new(),
-            hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            hash: "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
                 .to_string(),
             projected_keys: Vec::new(),
         }

@@ -1,6 +1,6 @@
 use crate::budget::check_budget;
 use crate::canonical::CanonicalState;
-use crate::gates::{build_state_projection, evaluate_gates, GateContext};
+use crate::gates::{build_state_projection, escalate_on_injection, evaluate_gates, GateContext};
 use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment};
 use crate::paths::repo_root;
 use crate::routing::route_verdict;
@@ -109,10 +109,12 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
         confidence_floor: floor,
         replay: false,
         budget_ok: true,
+        routing_reason: Some(routed.reason.as_str()),
     });
+    let (verdict, reason) = escalate_on_injection(&routed.verdict, &routed.reason, &gate_outcomes);
 
     info!(
-        verdict = %routed.verdict,
+        verdict = %verdict,
         stage = %routed.stage,
         confidence = routed.confidence,
         deciding = %routed.deciding.join(","),
@@ -122,13 +124,13 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
     Ok(JudgmentResult {
         rubric_id: rubric.id,
         rubric_version: rubric.version.clone(),
-        verdict: routed.verdict,
+        verdict,
         confidence: routed.confidence,
         stage: routed.stage,
         model,
         usage,
         answers,
-        routing_reason: routed.reason,
+        routing_reason: reason,
         mock: mock_mode,
         deciding_answers: routed.deciding,
         confidence_floor: floor,
@@ -193,20 +195,24 @@ pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Resu
             confidence_floor: floor,
             replay: true,
             budget_ok: true,
+            routing_reason: Some(routed.reason.as_str()),
         })
     } else {
         saved.deterministic_gates.clone()
     };
+    let published_reason = format!("{prefix}: {}", routed.reason);
+    let (verdict, published_reason) =
+        escalate_on_injection(&routed.verdict, &published_reason, &gate_outcomes);
     Ok(JudgmentResult {
         rubric_id: rubric.id,
         rubric_version: rubric.version.clone(),
-        verdict: routed.verdict,
+        verdict,
         confidence: routed.confidence,
         stage: routed.stage,
         model: saved.model.clone().unwrap_or_else(|| rubric.model.clone()),
         usage: saved.usage.clone(),
         answers: saved.answers.clone(),
-        routing_reason: format!("{prefix}: {}", routed.reason),
+        routing_reason: published_reason,
         mock: saved.mock,
         deciding_answers: routed.deciding,
         confidence_floor: floor,

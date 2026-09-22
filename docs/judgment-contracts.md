@@ -25,7 +25,9 @@ A **score** is an ordinal level (with API `legend` and `probabilities`). The num
 - This is **not** a probability that the final verdict is correct.
 - Answers the rule did not read never inflate confidence.
 
-Automatic `pass` / `fail` verdicts below `confidence_floors[stakes]` downgrade to `review`.
+Automatic `pass` / `fail` verdicts below `confidence_floors[stakes]` downgrade to `review`. The `confidence_floor` gate records `fail` for that downgrade.
+
+A failed `injection_heuristic` gate escalates the verdict. It does not leave a scored `pass` or `fail` in place.
 
 ### Missing answers
 
@@ -50,4 +52,4 @@ Exit **`11`** is reserved for CLI usage errors, also distinct from verdicts.
 
 ## Optional tracing (Python only)
 
-Install `uv sync --extra tracing`, set `JUDGE_JEV_LOGFIRE_TOKEN`, and optionally set `JUDGE_JEV_LOGFIRE_REGION=eu` (default **eu**). The write token selects the Logfire project. Run with `--tracing`, optionally adding `--tracing-to logfire`; `--tracing-to` alone does not enable tracing. Without the extra or token, tracing is a no-op. Rust accepts the same flags and validates the sink when `--tracing` is set, but does not emit Logfire spans in v1.
+Install `uv sync --extra tracing` and set `JUDGE_JEV_LOGFIRE_TOKEN`. The write token selects the Logfire project and region. Set `JUDGE_JEV_LOGFIRE_REGION` to `eu` or `us` only to override that host. Run with `--tracing`, optionally adding `--tracing-to logfire`; `--tracing-to` alone does not enable tracing. Without the extra or token, tracing is a no-op. Rust accepts the same flags and validates the sink when `--tracing` is set, but does not emit Logfire spans in v1.

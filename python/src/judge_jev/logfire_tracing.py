@@ -1,4 +1,4 @@
-"""Optional Logfire (EU) tracing for the Python runtime.
+"""Optional Logfire tracing for the Python runtime.
 
 Default off. Missing the `[tracing]` extra or token is a clean no-op.
 """
@@ -31,13 +31,17 @@ class TracingConfig:
         return cls(enabled=True, sink=sink)
 
 
-def _resolve_region() -> str:
-    region = os.environ.get("JUDGE_JEV_LOGFIRE_REGION", "eu").strip().lower()
-    return region if region in ("eu", "us") else "eu"
-
-
-def _resolve_base_url() -> str:
-    return EU_BASE_URL if _resolve_region() == "eu" else US_BASE_URL
+def _explicit_base_url() -> str | None:
+    """Host override from JUDGE_JEV_LOGFIRE_REGION. Unset leaves the token's region."""
+    raw = os.environ.get("JUDGE_JEV_LOGFIRE_REGION")
+    if raw is None or not raw.strip():
+        return None
+    region = raw.strip().lower()
+    if region == "eu":
+        return EU_BASE_URL
+    if region == "us":
+        return US_BASE_URL
+    raise ValueError(f"JUDGE_JEV_LOGFIRE_REGION must be 'eu' or 'us', got {region!r}")
 
 
 def _redact_text(value: str, *, limit: int = 120) -> str:
@@ -55,22 +59,27 @@ def configure_tracing(config: TracingConfig) -> bool:
     if not token:
         return False
 
+    # Reject a bad region even when the SDK is missing, so the same env fails the
+    # same way with or without the extra. Leave base_url unset otherwise so
+    # Logfire reads the region from the token (pylf_v1_eu_ / pylf_v1_us_).
+    base_url = _explicit_base_url()
     try:
         import logfire
     except ImportError:
         return False
 
-    # The write token selects the project; configure has no project_name option.
-    base_url = _resolve_base_url()
-    logfire.configure(
-        token=token,
-        service_name="judge-jev",
-        service_version=os.environ.get("JUDGE_JEV_VERSION", "0.1.0"),
-        environment=os.environ.get("JUDGE_JEV_LOGFIRE_ENVIRONMENT", "local"),
-        send_to_logfire=True,
-        console=False,  # stdout is reserved for JudgmentResult JSON.
-        advanced=logfire.AdvancedOptions(base_url=base_url),
-    )
+    # The write token selects the project. configure has no project_name option.
+    options: dict[str, Any] = {
+        "token": token,
+        "service_name": "judge-jev",
+        "service_version": os.environ.get("JUDGE_JEV_VERSION", "0.1.0"),
+        "environment": os.environ.get("JUDGE_JEV_LOGFIRE_ENVIRONMENT", "local"),
+        "send_to_logfire": True,
+        "console": False,  # stdout is reserved for JudgmentResult JSON.
+    }
+    if base_url is not None:
+        options["advanced"] = logfire.AdvancedOptions(base_url=base_url)
+    logfire.configure(**options)
     return True
 
 

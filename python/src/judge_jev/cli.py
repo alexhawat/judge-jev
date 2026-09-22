@@ -54,9 +54,9 @@ def _tracing_active(args: argparse.Namespace) -> bool:
         return False
     try:
         config = TracingConfig.from_cli(tracing=True, tracing_to=getattr(args, "tracing_to", None))
+        return configure_tracing(config)
     except ValueError as err:
         raise JudgeJevError(str(err)) from err
-    return configure_tracing(config)
 
 
 def cmd_run(args: argparse.Namespace) -> int:

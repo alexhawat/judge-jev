@@ -17,10 +17,40 @@ pub fn state_projection_hash(paths: &[String]) -> String {
     format!("sha256:{}", sha256_hex(payload.as_bytes()))
 }
 
+/// JSON string encoding that matches Python `json.dumps(..., ensure_ascii=True)`.
+fn python_json_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || (c as u32) > 0x7f => {
+                let cp = c as u32;
+                if cp > 0xFFFF {
+                    let v = cp - 0x10000;
+                    let hi = 0xD800 + (v >> 10);
+                    let lo = 0xDC00 + (v & 0x3FF);
+                    out.push_str(&format!("\\u{hi:04x}\\u{lo:04x}"));
+                } else {
+                    out.push_str(&format!("\\u{cp:04x}"));
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn compact_json_array(items: &[String]) -> String {
     let inner = items
         .iter()
-        .map(|item| serde_json::to_string(item).unwrap_or_else(|_| "\"\"".to_string()))
+        .map(|item| python_json_string(item))
         .collect::<Vec<_>>()
         .join(",");
     format!("[{inner}]")
@@ -140,6 +170,7 @@ pub struct GateContext<'a> {
     pub confidence_floor: f64,
     pub replay: bool,
     pub budget_ok: bool,
+    pub routing_reason: Option<&'a str>,
 }
 
 pub fn evaluate_gates(ctx: &GateContext<'_>) -> Vec<GateOutcome> {
@@ -166,6 +197,7 @@ pub fn evaluate_gates(ctx: &GateContext<'_>) -> Vec<GateOutcome> {
             ctx.verdict,
             ctx.confidence,
             ctx.confidence_floor,
+            ctx.routing_reason,
         ));
         return outcomes;
     }
@@ -211,8 +243,49 @@ pub fn evaluate_gates(ctx: &GateContext<'_>) -> Vec<GateOutcome> {
         ctx.verdict,
         ctx.confidence,
         ctx.confidence_floor,
+        ctx.routing_reason,
     ));
     outcomes
+}
+
+pub fn escalate_on_injection(
+    verdict: &str,
+    reason: &str,
+    gates: &[GateOutcome],
+) -> (String, String) {
+    let failed = gates
+        .iter()
+        .any(|gate| gate.gate_id == "injection_heuristic" && gate.outcome == "fail");
+    if !failed || verdict == "escalate" {
+        return (verdict.to_string(), reason.to_string());
+    }
+    (
+        "escalate".to_string(),
+        format!("{reason} Injection heuristic failed; verdict escalated."),
+    )
+}
+
+fn gated_subject(verdict: &str, routing_reason: Option<&str>) -> String {
+    let Some(reason) = routing_reason else {
+        return verdict.to_string();
+    };
+    let marker = "Downgraded from '";
+    let Some(index) = reason.rfind(marker) else {
+        return verdict.to_string();
+    };
+    let rest = &reason[index + marker.len()..];
+    let Some(end) = rest.find('\'') else {
+        return verdict.to_string();
+    };
+    if end == 0 {
+        return verdict.to_string();
+    }
+    let original = &rest[..end];
+    if GATED_VERDICTS.contains(&original) {
+        original.to_string()
+    } else {
+        verdict.to_string()
+    }
 }
 
 fn injection_heuristic_gate(filtered_state: Option<&Value>) -> GateOutcome {
@@ -283,6 +356,7 @@ fn confidence_floor_gate(
     verdict: Option<&str>,
     confidence: Option<f64>,
     floor: f64,
+    routing_reason: Option<&str>,
 ) -> GateOutcome {
     let (Some(verdict), Some(confidence)) = (verdict, confidence) else {
         return GateOutcome {
@@ -291,7 +365,8 @@ fn confidence_floor_gate(
             reason: "routing not complete".to_string(),
         };
     };
-    if !GATED_VERDICTS.contains(&verdict) {
+    let subject = gated_subject(verdict, routing_reason);
+    if !GATED_VERDICTS.contains(&subject.as_str()) {
         return GateOutcome {
             gate_id: "confidence_floor".to_string(),
             outcome: "skip".to_string(),
@@ -303,6 +378,14 @@ fn confidence_floor_gate(
             gate_id: "confidence_floor".to_string(),
             outcome: "pass".to_string(),
             reason: format!("confidence {confidence:.2} meets {floor:.2} floor"),
+        }
+    } else if subject != verdict {
+        GateOutcome {
+            gate_id: "confidence_floor".to_string(),
+            outcome: "fail".to_string(),
+            reason: format!(
+                "confidence {confidence:.2} below {floor:.2} floor (downgraded {subject} to review)"
+            ),
         }
     } else {
         GateOutcome {
@@ -329,6 +412,21 @@ mod tests {
         assert_eq!(
             state_projection_hash(&paths),
             "sha256:7d26c079d3169ddc395d6e9418adebd2c8ed8ef2936aa0ff5f170f1430ae265b"
+        );
+    }
+
+    #[test]
+    fn empty_projection_hash_is_the_default() {
+        use crate::models::StateProjection;
+
+        assert_eq!(state_projection_hash(&[]), StateProjection::default().hash);
+    }
+
+    #[test]
+    fn projection_hash_escapes_non_ascii_like_python() {
+        assert_eq!(
+            state_projection_hash(&["café".to_string()]),
+            "sha256:d9957358c680f7382fdf2e65ede7171846b650ebea7953d521837c3b16eed288"
         );
     }
 }

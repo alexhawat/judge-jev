@@ -11,7 +11,13 @@ from loguru import logger
 
 from judge_jev.budget import check_budget
 from judge_jev.canonical import CanonicalState
-from judge_jev.gates import GateContext, build_state_projection, evaluate_gates
+from judge_jev.gates import (
+    GateContext,
+    build_state_projection,
+    escalate_on_injection,
+    evaluate_gates,
+    state_projection_hash,
+)
 from judge_jev.logfire_tracing import span_gates, span_judge_run, span_route, span_system_one
 from judge_jev.models import (
     RUNTIME_NAME,
@@ -154,8 +160,10 @@ def run_judgment(
             confidence_floor=rubric.confidence_floor,
             replay=False,
             budget_ok=True,
+            routing_reason=reason,
         )
         gate_outcomes = evaluate_gates(gate_ctx)
+        verdict, reason = escalate_on_injection(verdict, reason, gate_outcomes)
 
         with span_gates(gate_outcomes, active=tracing_active):
             pass
@@ -240,10 +248,12 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
     )
 
     projection_data = saved.get("state_projection") or {}
+    paths = [str(path) for path in (projection_data.get("paths") or [])]
+    raw_hash = projection_data.get("hash")
     projection = StateProjection(
-        paths=list(projection_data.get("paths") or []),
-        hash=str(projection_data.get("hash") or "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-        projected_keys=list(projection_data.get("projected_keys") or []),
+        paths=paths,
+        hash=str(raw_hash) if raw_hash else state_projection_hash(paths),
+        projected_keys=[str(key) for key in (projection_data.get("projected_keys") or [])],
     )
     gate_outcomes = [
         GateOutcome(g["gate_id"], g["outcome"], g["reason"])
@@ -259,9 +269,11 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
                 confidence=confidence,
                 confidence_floor=rubric.confidence_floor,
                 replay=True,
+                routing_reason=reason,
             )
         )
 
+    verdict, published_reason = escalate_on_injection(verdict, f"{prefix}: {reason}", gate_outcomes)
     return JudgmentResult(
         rubric_id=rubric.id,
         rubric_version=rubric.version,
@@ -271,7 +283,7 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
         model=saved.get("model", rubric.model),
         usage=usage,
         answers=answers,
-        routing_reason=f"{prefix}: {reason}",
+        routing_reason=published_reason,
         mock=saved.get("mock", False),
         deciding_answers=deciding,
         confidence_floor=rubric.confidence_floor,
