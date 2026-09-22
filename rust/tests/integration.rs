@@ -642,6 +642,77 @@ fn cli_out(args: &[&str]) -> (i32, String, String) {
 }
 
 #[test]
+fn tracing_flags_preserve_mock_judgments() {
+    let input = fixtures().join("assistant-reply-pass.json");
+    let base = [
+        "run",
+        "--rubric",
+        "assistant-reply",
+        "--input",
+        input.to_str().unwrap(),
+        "--mock",
+    ];
+    let (code, stdout, stderr) = cli_out(&base);
+    assert_eq!(code, 0, "{stderr}");
+    let expected: Value = serde_json::from_str(&stdout).unwrap();
+    for flags in [
+        vec!["--tracing"],
+        vec!["--tracing", "--tracing-to", "logfire"],
+        vec!["--tracing", "--tracing-to", " LogFire "],
+        vec!["--tracing", "--tracing-to", ""],
+        vec!["--tracing-to", "logfire"],
+        vec!["--tracing-to", "otel"],
+    ] {
+        let mut args = base.to_vec();
+        args.extend(flags);
+        let (code, stdout, stderr) = cli_out(&args);
+        assert_eq!(code, 0, "args {args:?}: {stderr}");
+        assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), expected);
+    }
+}
+
+#[test]
+fn tracing_errors_remain_distinct_from_verdicts() {
+    for (flags, expected_code, message) in [
+        (
+            vec!["--tracing", "--tracing"],
+            11,
+            "--tracing given more than once",
+        ),
+        (vec!["--tracing-to"], 11, "--tracing-to needs a value"),
+        (
+            vec!["--tracing-to", "--mock"],
+            11,
+            "--tracing-to needs a value",
+        ),
+        (
+            vec!["--tracing-to", "logfire", "--tracing-to", "logfire"],
+            11,
+            "--tracing-to given more than once",
+        ),
+        (
+            vec!["--tracing", "--tracing-to", "otel"],
+            10,
+            "unsupported tracing sink 'otel'; only 'logfire' is available",
+        ),
+    ] {
+        let mut args = vec![
+            "run",
+            "--rubric",
+            "assistant-reply",
+            "--input",
+            "x.json",
+            "--mock",
+        ];
+        args.extend(flags);
+        let (code, stdout, stderr) = cli_out(&args);
+        assert_eq!(code, expected_code, "args {args:?}: {stderr}");
+        assert!(stdout.is_empty());
+        assert!(stderr.contains(message), "{stderr}");
+    }
+}
+
+#[test]
 fn result_records_the_rubric_version_and_the_runtime_that_ran_it() {
     let rubric = load_rubric("assistant-reply").expect("rubric");
     let result = run_judgment(

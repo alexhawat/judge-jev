@@ -60,7 +60,7 @@ def configure_tracing(config: TracingConfig) -> bool:
     except ImportError:
         return False
 
-    project = os.environ.get("JUDGE_JEV_LOGFIRE_PROJECT", "judge-jev").strip() or "judge-jev"
+    # The write token selects the project; configure has no project_name option.
     base_url = _resolve_base_url()
     logfire.configure(
         token=token,
@@ -68,7 +68,7 @@ def configure_tracing(config: TracingConfig) -> bool:
         service_version=os.environ.get("JUDGE_JEV_VERSION", "0.1.0"),
         environment=os.environ.get("JUDGE_JEV_LOGFIRE_ENVIRONMENT", "local"),
         send_to_logfire=True,
-        project_name=project,
+        console=False,  # stdout is reserved for JudgmentResult JSON.
         advanced=logfire.AdvancedOptions(base_url=base_url),
     )
     return True

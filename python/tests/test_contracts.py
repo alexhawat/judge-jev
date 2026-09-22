@@ -120,7 +120,8 @@ def test_missing_judge_answer_escalates_not_pass():
     assert completeness.outcome == "fail"
 
 
-def test_tracing_extra_absent_is_noop():
+def test_tracing_without_token_is_noop(monkeypatch):
+    monkeypatch.delenv("JUDGE_JEV_LOGFIRE_TOKEN", raising=False)
     config = TracingConfig.from_cli(tracing=True, tracing_to="logfire")
     assert configure_tracing(config) is False
 
@@ -130,7 +131,8 @@ def test_tracing_config_rejects_unknown_sink():
         TracingConfig.from_cli(tracing=True, tracing_to="otel")
 
 
-def test_tracing_flag_without_extra_still_runs_mock(capsys):
+def test_tracing_flag_without_token_still_runs_mock(capsys, monkeypatch):
+    monkeypatch.delenv("JUDGE_JEV_LOGFIRE_TOKEN", raising=False)
     code = main(
         [
             "run",

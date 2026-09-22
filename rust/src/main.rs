@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: judge-jev <setup|run|rubric|replay> ...
   setup
-  run    --rubric <id> --input <file.json|-> [--mock]
+  run    --rubric <id> --input <file.json|-> [--mock] [--tracing] [--tracing-to logfire]
   replay --input <result.json|-> [--allow-version-drift]
   rubric list | show --id <id>
   --version";
@@ -62,7 +62,11 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
             Ok(EXIT_OK)
         }
         "run" => {
-            let flags = match Flags::parse(&args[1..], &["--rubric", "--input"], &["--mock"]) {
+            let flags = match Flags::parse(
+                &args[1..],
+                &["--rubric", "--input", "--tracing-to"],
+                &["--mock", "--tracing"],
+            ) {
                 Ok(flags) => flags,
                 Err(msg) => return Ok(usage_error(&msg)),
             };
@@ -70,6 +74,21 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
                 (Ok(rubric), Ok(input)) => (rubric, input),
                 (Err(msg), _) | (_, Err(msg)) => return Ok(usage_error(&msg)),
             };
+            // Match Python's sink validation, but tracing is a no-op in Rust v1.
+            // Like Python, --tracing-to alone does not enable tracing.
+            if flags.is_set("--tracing") {
+                let sink = flags
+                    .values
+                    .get("--tracing-to")
+                    .map(String::as_str)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("logfire")
+                    .trim()
+                    .to_lowercase();
+                if sink != "logfire" {
+                    anyhow::bail!("unsupported tracing sink '{sink}'; only 'logfire' is available");
+                }
+            }
             let result = run_judgment(&rubric, &PathBuf::from(input), flags.is_set("--mock"))?;
             print_result(&result)?;
             Ok(exit_for_verdict(&result.verdict))

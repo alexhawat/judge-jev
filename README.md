@@ -139,13 +139,13 @@ outcomes). TypeSafe/API failures exit `10` and never emit a scored pass/fail ver
 ### Optional tracing (Python)
 
 ```bash
-cd python && uv sync --extra tracing
+(cd python && uv sync --extra tracing)
 export JUDGE_JEV_LOGFIRE_TOKEN=...          # EU by default (logfire-eu.pydantic.dev)
-export JUDGE_JEV_LOGFIRE_PROJECT=judge-jev  # optional
 ./scripts/judge-jev run --rubric assistant-reply --input fixtures/assistant-reply-pass.json --mock --tracing
 ```
 
-Default **off**. Missing the extra or token is a no-op. Rust does not emit Logfire spans in v1.
+Default **off**. The write token selects the Logfire project. Missing the extra or
+token is a no-op. Rust accepts the same tracing flags as a no-op in v1.
 
 ## Layout
 
@@ -184,7 +184,6 @@ Set `JUDGE_JEV_RUNTIME=python|rust` or run setup interactively.
 | `JUDGE_JEV_TOKEN_BUDGET` | Ceiling, in estimated tokens, for one System One request (default `32000`). The estimate covers the filtered state and the rubric's questions together and is logged at INFO on every run. Exceeding it exits `10` before anything is sent, naming the largest contributing key. Must be a positive integer. |
 | `JUDGE_JEV_MAX_RETRIES` | Retries after the initial attempt on a 408, 429, 5xx, connection or timeout error (default `2`, matching `typesafe-sdk`). `0` disables retries. Both runtimes read it; backoff is 0.5s doubling to a 5s cap with jitter, under a 30s total budget per call. |
 | `JUDGE_JEV_LOGFIRE_TOKEN` | Optional Logfire write token (Python `[tracing]` extra; default region EU) |
-| `JUDGE_JEV_LOGFIRE_PROJECT` | Logfire project name (default `judge-jev`) |
 | `JUDGE_JEV_LOGFIRE_REGION` | `eu` (default) or `us` — must match the token's region |
 
 ## Harness integration

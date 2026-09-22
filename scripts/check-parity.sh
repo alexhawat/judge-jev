@@ -100,6 +100,24 @@ for case in "${CASES[@]}"; do
   compare_results "$TMP/py.json" "$TMP/rs.json" "$fixture" || failed=1
 done
 
+# ----------------------------------------------------------- optional tracing
+# No token: Python tracing and Rust's explicit no-op must preserve the contract.
+for raw in "--tracing" "--tracing --tracing-to logfire" "--tracing-to logfire"; do
+  read -r -a tracing_args <<< "$raw"
+  set +e
+  JUDGE_JEV_LOGFIRE_TOKEN= py run --rubric assistant-reply --input "$ROOT/fixtures/assistant-reply-pass.json" --mock "${tracing_args[@]}" >"$TMP/py.json" 2>/dev/null
+  py_exit=$?
+  rs run --rubric assistant-reply --input "$ROOT/fixtures/assistant-reply-pass.json" --mock "${tracing_args[@]}" >"$TMP/rs.json" 2>/dev/null
+  rs_exit=$?
+  set -e
+  if [[ "$py_exit" != 0 || "$rs_exit" != 0 ]]; then
+    echo "FAIL tracing $raw: expected pass (python=$py_exit rust=$rs_exit)" >&2
+    failed=1
+  else
+    compare_results "$TMP/py.json" "$TMP/rs.json" "tracing $raw" || failed=1
+  fi
+done
+
 # ------------------------------------------------------------------- stdin (#7)
 # `--input -` must reach the same verdict as the same bytes on disk.
 STDIN_INPUT="$ROOT/fixtures/assistant-reply-pass.json"
@@ -202,6 +220,10 @@ ARGV_CASES=(
   "run --rubric assistant-reply --rubric agent-trajectory --input FIXTURE --mock"
   "run --input FIXTURE --mock --rubric"
   "run --input FIXTURE --mock"
+  "run --rubric assistant-reply --input FIXTURE --mock --tracing --tracing"
+  "run --rubric assistant-reply --input FIXTURE --mock --tracing-to"
+  "run --rubric assistant-reply --input FIXTURE --mock --tracing-to --tracing"
+  "run --rubric assistant-reply --input FIXTURE --mock --tracing-to logfire --tracing-to logfire"
   "rubric bogus"
   "bogus-command"
 )

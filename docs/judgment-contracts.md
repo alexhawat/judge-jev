@@ -50,4 +50,4 @@ Exit **`11`** is reserved for CLI usage errors, also distinct from verdicts.
 
 ## Optional tracing (Python only)
 
-Install `uv sync --extra tracing`, set `JUDGE_JEV_LOGFIRE_TOKEN`, optionally `JUDGE_JEV_LOGFIRE_PROJECT` and `JUDGE_JEV_LOGFIRE_REGION=eu` (default **eu**). Run with `--tracing` / `--tracing-to logfire`. Without the extra or token, tracing is a no-op. The Rust runtime does not emit Logfire spans in v1.
+Install `uv sync --extra tracing`, set `JUDGE_JEV_LOGFIRE_TOKEN`, and optionally set `JUDGE_JEV_LOGFIRE_REGION=eu` (default **eu**). The write token selects the Logfire project. Run with `--tracing`, optionally adding `--tracing-to logfire`; `--tracing-to` alone does not enable tracing. Without the extra or token, tracing is a no-op. Rust accepts the same flags and validates the sink when `--tracing` is set, but does not emit Logfire spans in v1.
