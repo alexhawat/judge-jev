@@ -135,6 +135,29 @@ def test_adapter_budget_exhaustion_and_missing_usage_are_systemic() -> None:
         missing.evaluate([{"id": "x", "expected_verdict": "pass"}], {"q": "text"})
 
 
+def test_cached_evidence_keeps_same_expected_token_objective() -> None:
+    calls = 0
+
+    def evaluator(_row, _instruction):
+        nonlocal calls
+        calls += 1
+        return {
+            "verdict": "pass",
+            "usage": {"input_tokens": 2, "output_tokens": 3},
+            "newly_billed_tokens": 5 if calls == 1 else 0,
+            "newly_billed_model_call": calls == 1,
+        }
+
+    ledger = BudgetLedger(2)
+    adapter = JevGEPAAdapter("q", evaluator, load_cost_policy(), ledger, FakeBatch)
+    row = {"id": "x", "expected_verdict": "pass"}
+    first = adapter.evaluate([row], {"q": "text"})
+    cached = adapter.evaluate([row], {"q": "text"})
+    assert first.scores == cached.scores
+    assert ledger.actual_tokens == 5
+    assert ledger.provider_calls == 1
+
+
 def test_instruction_dry_run_imports_no_gepa_and_calls_no_model(tmp_path: Path) -> None:
     cases = tmp_path / "cases.jsonl"
     _cases(cases)

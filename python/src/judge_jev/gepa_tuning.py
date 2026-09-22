@@ -260,7 +260,8 @@ class JevGEPAAdapter:
             token_values = [usage.get("input_tokens"), usage.get("output_tokens")]
             if any(value is not None and (type(value) is not int or value < 0) for value in token_values):
                 raise JudgeJevError("model result usage must contain non-negative integer or null token counts")
-            default_billed = sum(token_values) if all(type(value) is int for value in token_values) else None
+            expected_tokens = sum(token_values) if all(type(value) is int for value in token_values) else None
+            default_billed = expected_tokens
             billed_tokens = output.get("newly_billed_tokens", default_billed)
             if billed_tokens is not None and (type(billed_tokens) is not int or billed_tokens < 0):
                 raise JudgeJevError("newly_billed_tokens must be a non-negative integer or null")
@@ -284,11 +285,13 @@ class JevGEPAAdapter:
                 else 0.0
             )
             token_rate = float(self.cost_policy.get("token_cost_per_1000", 0.0))
-            if token_rate and billed_tokens is None:
+            if token_rate and expected_tokens is None:
                 raise JudgeJevError(
                     "model result token usage is unavailable for the declared tuning objective"
                 )
-            token_cost = token_rate * float(billed_tokens or 0) / 1000.0
+            # Expected policy cost describes one judgment regardless of whether
+            # this particular optimization run served its evidence from cache.
+            token_cost = token_rate * float(expected_tokens or 0) / 1000.0
             total_cost = confusion_cost + review_cost + token_cost
             score = -total_cost
             feedback = (
