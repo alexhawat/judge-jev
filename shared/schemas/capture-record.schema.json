@@ -11,6 +11,7 @@
     "rubric_id",
     "rubric_version",
     "rubric_hash",
+    "state_hash",
     "runtime",
     "backend",
     "backend_provenance",
@@ -18,11 +19,13 @@
     "model",
     "state",
     "answers",
+    "usage",
     "verdict",
     "confidence",
     "confidence_floor",
     "deciding_answers",
     "routing_reason",
+    "deterministic_gates",
     "rule_margins"
   ],
   "properties": {
@@ -40,6 +43,11 @@
     "rubric_id": { "type": "string", "minLength": 1 },
     "rubric_version": { "type": "string", "minLength": 1 },
     "rubric_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "state_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "SHA-256 of the canonical unredacted filtered state used for evaluation."
+    },
     "runtime": {
       "type": "object",
       "additionalProperties": false,
@@ -58,11 +66,15 @@
     "model": { "type": "string" },
     "state": { "type": "object" },
     "answers": { "$ref": "judgment-result.schema.json#/$defs/answers" },
+    "usage": { "$ref": "judgment-result.schema.json#/properties/usage" },
     "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "confidence_floor": { "type": "number", "minimum": 0, "maximum": 1 },
     "deciding_answers": { "type": "array", "items": { "type": "string" } },
     "routing_reason": { "type": "string" },
+    "deterministic_gates": {
+      "$ref": "judgment-result.schema.json#/properties/deterministic_gates"
+    },
     "rule_margins": {
       "type": "array",
       "items": {

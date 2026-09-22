@@ -1,19 +1,25 @@
 //! Bounded, opt-in capture of judgment evidence.
 
 use crate::models::{ConditionValue, FieldValue, JudgmentResult, RoutingRule, Rubric};
+use crate::{canonical::canonical_json, gates::sha256_prefixed};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const OWNED_PREFIX: &str = "judge-jev-capture-v1-";
 pub const OWNED_SUFFIX: &str = ".jsonl";
+
+static FILE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+type ProcessRuleCounts = Mutex<(u32, HashMap<(String, usize), usize>)>;
+static PROCESS_RULE_COUNTS: OnceLock<ProcessRuleCounts> = OnceLock::new();
 
 pub fn utc_timestamp() -> String {
     let seconds = SystemTime::now()
@@ -168,7 +174,9 @@ fn margin_for_rule(
             "threshold": threshold,
             "observed": observed_json,
             "kind": kind,
-            "matched": if evaluable { Some(condition_match) } else { None },
+            // Whether this condition matched is local to the condition. A prior
+            // missing answer must not erase the evidence for later conditions.
+            "matched": if kind == "unevaluable" { None } else { Some(condition_match) },
             "margin": margin,
         }));
     }
@@ -221,6 +229,7 @@ pub fn redact_state(state: &Value, paths: &[String]) -> Value {
     copied
 }
 
+#[allow(clippy::too_many_arguments)] // Fixed metadata is explicit for deterministic parity fixtures.
 pub fn build_record(
     result: &JudgmentResult,
     rubric: &Rubric,
@@ -271,17 +280,19 @@ pub fn build_record(
     if matches!(result.verdict.as_str(), "review" | "escalate") {
         reasons.push("non_pass");
     }
-    if policy.per_rule_quota > 0
-        && random < policy.per_rule_rate
-        && margins
-            .iter()
-            .any(|m| m.get("matched") == Some(&Value::Bool(true)))
+    let matched_rule = margins
+        .iter()
+        .position(|m| m.get("matched") == Some(&Value::Bool(true)));
+    if matched_rule
+        .map(|rule| take_process_rule_quota(rubric_hash, rule, policy))
+        .unwrap_or(false)
     {
         reasons.push("rule_quota");
     }
     if reasons.is_empty() {
         return None;
     }
+    let state_hash = sha256_prefixed(canonical_json(filtered_state).ok()?.as_bytes());
     Some(json!({
         "version": 1,
         "captured_at": captured_at,
@@ -289,6 +300,7 @@ pub fn build_record(
         "rubric_id": result.rubric_id,
         "rubric_version": result.rubric_version,
         "rubric_hash": rubric_hash,
+        "state_hash": state_hash,
         "runtime": runtime.unwrap_or_else(|| serde_json::to_value(&result.runtime).unwrap_or(Value::Null)),
         "backend": result.backend,
         "backend_provenance": result.backend_provenance,
@@ -296,13 +308,33 @@ pub fn build_record(
         "model": result.model,
         "state": redact_state(filtered_state, redact_paths),
         "answers": result.answers,
+        "usage": result.usage,
         "verdict": result.verdict,
         "confidence": result.confidence,
         "confidence_floor": result.confidence_floor,
         "deciding_answers": result.deciding_answers,
         "routing_reason": result.routing_reason,
+        "deterministic_gates": result.deterministic_gates,
         "rule_margins": margins,
     }))
+}
+
+fn take_process_rule_quota(rubric_hash: &str, rule: usize, policy: &CapturePolicy) -> bool {
+    if policy.per_rule_quota == 0 || random_fraction() >= policy.per_rule_rate {
+        return false;
+    }
+    let pid = std::process::id();
+    let counts = PROCESS_RULE_COUNTS.get_or_init(|| Mutex::new((pid, HashMap::new())));
+    let mut guard = counts.lock().expect("capture rule quota");
+    if guard.0 != pid {
+        *guard = (pid, HashMap::new());
+    }
+    let count = guard.1.entry((rubric_hash.to_string(), rule)).or_insert(0);
+    if *count >= policy.per_rule_quota {
+        return false;
+    }
+    *count += 1;
+    true
 }
 
 pub struct CaptureWriter {
@@ -379,16 +411,18 @@ impl CaptureWriter {
             return false;
         };
         bytes.push(b'\n');
-        if bytes.len() > self.policy.record_bytes
-            || self.queued_bytes.load(Ordering::Relaxed) + bytes.len() > self.policy.queue_bytes
-        {
+        if bytes.len() > self.policy.record_bytes {
             self.stats.lock().expect("capture stats").dropped += 1;
             return false;
         }
         let len = bytes.len();
         // Reserve before publishing to the receiver. Otherwise a fast writer can
-        // consume the record before these counters are incremented.
-        self.queued_bytes.fetch_add(len, Ordering::AcqRel);
+        // consume the record before these counters are incremented. The CAS also
+        // keeps concurrent producers from racing past the byte cap.
+        if !reserve_bytes(&self.queued_bytes, len, self.policy.queue_bytes) {
+            self.stats.lock().expect("capture stats").dropped += 1;
+            return false;
+        }
         self.pending_records.fetch_add(1, Ordering::AcqRel);
         if self.stop.load(Ordering::Acquire) || self.failed.load(Ordering::Acquire) {
             self.queued_bytes.fetch_sub(len, Ordering::AcqRel);
@@ -425,9 +459,28 @@ impl CaptureWriter {
     }
 }
 
+fn reserve_bytes(queued: &AtomicUsize, len: usize, cap: usize) -> bool {
+    let mut current = queued.load(Ordering::Acquire);
+    loop {
+        let Some(next) = current.checked_add(len) else {
+            return false;
+        };
+        if next > cap {
+            return false;
+        }
+        match queued.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 fn new_file(directory: &Path, pid: u32) -> Result<(File, PathBuf)> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let path = directory.join(format!("{OWNED_PREFIX}{pid}-{stamp}{OWNED_SUFFIX}.active"));
+    let sequence = FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let path = directory.join(format!(
+        "{OWNED_PREFIX}{pid}-{stamp}-{sequence}{OWNED_SUFFIX}.active"
+    ));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -453,6 +506,31 @@ fn finalize_file(mut file: File, active: &Path) -> Result<()> {
     Ok(())
 }
 
+fn prepare_directory(directory: &Path) -> Result<()> {
+    if directory
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        anyhow::bail!("capture directory must not be a symlink");
+    }
+    fs::create_dir_all(directory).context("create capture directory")?;
+    if directory
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink() || !m.file_type().is_dir())
+        .unwrap_or(true)
+    {
+        anyhow::bail!("capture directory must be a real directory");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(directory, fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // Worker state is passed as shared atomics owned by CaptureWriter.
 fn writer_loop(
     directory: &Path,
     pid: u32,
@@ -464,37 +542,9 @@ fn writer_loop(
     stop: &AtomicBool,
     failed: &AtomicBool,
 ) {
-    if directory
-        .symlink_metadata()
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        stats.lock().expect("capture stats").errors += 1;
-        failed.store(true, Ordering::Release);
-        drain_failed(&receiver, queued, pending, stats);
-        return;
-    }
-    if fs::create_dir_all(directory).is_err() {
-        stats.lock().expect("capture stats").errors += 1;
-        failed.store(true, Ordering::Release);
-        drain_failed(&receiver, queued, pending, stats);
-        return;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(directory, fs::Permissions::from_mode(0o700));
-    }
-    let (initial_file, mut active_path) = match new_file(directory, pid) {
-        Ok(pair) => pair,
-        Err(_) => {
-            stats.lock().expect("capture stats").errors += 1;
-            failed.store(true, Ordering::Release);
-            drain_failed(&receiver, queued, pending, stats);
-            return;
-        }
-    };
-    let mut file = Some(initial_file);
+    let mut file: Option<File> = None;
+    let mut active_path: Option<PathBuf> = None;
+    let mut prepared = false;
     let mut size = 0usize;
     loop {
         let bytes = match receiver.recv_timeout(Duration::from_millis(20)) {
@@ -504,8 +554,46 @@ fn writer_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
         queued.fetch_sub(bytes.len(), Ordering::AcqRel);
+        // close() transfers all pending records to its dropped count when the
+        // finite shutdown deadline expires. Do not later persist queued records
+        // that the caller was told were abandoned.
+        if pending.load(Ordering::Acquire) == 0 {
+            continue;
+        }
+        if !prepared {
+            if prepare_directory(directory).is_err() {
+                stats.lock().expect("capture stats").errors += 1;
+                failed.store(true, Ordering::Release);
+                if release_pending(pending) {
+                    stats.lock().expect("capture stats").dropped += 1;
+                }
+                drain_failed(&receiver, queued, pending, stats);
+                return;
+            }
+            prepared = true;
+            match new_file(directory, pid) {
+                Ok((new_file, new_path)) => {
+                    file = Some(new_file);
+                    active_path = Some(new_path);
+                }
+                Err(_) => {
+                    stats.lock().expect("capture stats").errors += 1;
+                    failed.store(true, Ordering::Release);
+                    if release_pending(pending) {
+                        stats.lock().expect("capture stats").dropped += 1;
+                    }
+                    drain_failed(&receiver, queued, pending, stats);
+                    return;
+                }
+            }
+        }
         if size > 0 && size + bytes.len() > policy.file_bytes {
-            if finalize_file(file.take().expect("active capture file"), &active_path).is_err() {
+            if finalize_file(
+                file.take().expect("active capture file"),
+                active_path.as_ref().expect("active capture path"),
+            )
+            .is_err()
+            {
                 stats.lock().expect("capture stats").errors += 1;
                 failed.store(true, Ordering::Release);
                 if release_pending(pending) {
@@ -514,11 +602,11 @@ fn writer_loop(
                 drain_failed(&receiver, queued, pending, stats);
                 break;
             }
-            let _ = enforce_bounds(directory, policy, stats);
+            let _ = enforce_bounds(directory, policy, stats, 0);
             match new_file(directory, pid) {
                 Ok((new_file, new_path)) => {
                     file = Some(new_file);
-                    active_path = new_path;
+                    active_path = Some(new_path);
                     size = 0;
                 }
                 Err(_) => {
@@ -532,11 +620,14 @@ fn writer_loop(
                 }
             }
         }
-        let _ = enforce_bounds(directory, policy, stats);
-        if directory_size(directory).unwrap_or(policy.directory_bytes as u64 + 1)
-            + bytes.len() as u64
-            > policy.directory_bytes as u64
-        {
+        let has_room = match enforce_bounds(directory, policy, stats, bytes.len() as u64) {
+            Ok(has_room) => has_room,
+            Err(_) => {
+                stats.lock().expect("capture stats").errors += 1;
+                false
+            }
+        };
+        if !has_room {
             if release_pending(pending) {
                 stats.lock().expect("capture stats").dropped += 1;
             }
@@ -557,17 +648,20 @@ fn writer_loop(
                 if release_pending(pending) {
                     stats.lock().expect("capture stats").errors += 1;
                 }
+                failed.store(true, Ordering::Release);
+                drain_failed(&receiver, queued, pending, stats);
+                break;
             }
         }
     }
-    if let Some(file) = file {
+    if let (Some(file), Some(active_path)) = (file, active_path) {
         if finalize_file(file, &active_path).is_err() {
             stats.lock().expect("capture stats").errors += 1;
         }
-    } else {
-        stats.lock().expect("capture stats").errors += 1;
     }
-    let _ = enforce_bounds(directory, policy, stats);
+    if prepared {
+        let _ = enforce_bounds(directory, policy, stats, 0);
+    }
 }
 
 fn release_pending(pending: &AtomicUsize) -> bool {
@@ -639,20 +733,29 @@ fn enforce_bounds(
     directory: &Path,
     policy: &CapturePolicy,
     stats: &Mutex<CaptureStats>,
-) -> Result<()> {
+    incoming_bytes: u64,
+) -> Result<bool> {
     let mut files = owned_files(directory)?;
-    let mut total: u64 = files.iter().map(|(_, m)| m.len()).sum();
+    // Active files contribute to the cap but are never eviction candidates.
+    // Reserve the pending record before deciding the directory is full so a
+    // finalized file at the cap can be removed and capture can resume.
+    let mut total = directory_size(directory)?;
     while !files.is_empty()
-        && (files.len() > policy.retention_files || total > policy.directory_bytes as u64)
+        && (files.len() > policy.retention_files
+            || total + incoming_bytes > policy.directory_bytes as u64)
     {
-        let (path, metadata) = files.remove(0);
-        if fs::remove_file(path).is_ok() {
-            total = total.saturating_sub(metadata.len());
-        } else {
-            stats.lock().expect("capture stats").errors += 1;
+        let (path, _metadata) = files.remove(0);
+        match fs::remove_file(path) {
+            Ok(()) => {
+                total = directory_size(directory)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                total = directory_size(directory)?;
+            }
+            Err(_) => stats.lock().expect("capture stats").errors += 1,
         }
     }
-    Ok(())
+    Ok(total + incoming_bytes <= policy.directory_bytes as u64)
 }
 
 pub fn prune(directory: &Path, older_than: Duration, apply: bool) -> Result<Vec<PathBuf>> {
@@ -686,8 +789,8 @@ pub fn prune(directory: &Path, older_than: Duration, apply: bool) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Answer;
-    use crate::rubric::load_rubric;
+    use crate::models::{Answer, JudgmentResult};
+    use crate::rubric::{load_rubric, rubric_content_hash};
     use std::collections::HashMap;
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -717,6 +820,41 @@ mod tests {
         assert_eq!(margins[0]["margin"], 0.0);
         assert_eq!(margins[0]["matched"], false);
         assert_eq!(margins[1]["evaluable"], false);
+
+        let mut later_answer = HashMap::new();
+        later_answer.insert(
+            "score.helpfulness".into(),
+            Answer::Score {
+                score: 1.0,
+                confidence: 0.9,
+                legend: None,
+                probabilities: HashMap::new(),
+            },
+        );
+        let later_margins = rule_margins(&rubric, &later_answer);
+        assert_eq!(later_margins[9]["conditions"][0]["matched"], Value::Null);
+        assert_eq!(later_margins[9]["conditions"][1]["matched"], true);
+    }
+
+    #[test]
+    fn process_rule_quota_is_exact() {
+        let policy = CapturePolicy {
+            per_rule_quota: 2,
+            per_rule_rate: 1.0,
+            ..CapturePolicy::default()
+        };
+        assert!(take_process_rule_quota("rubric-a", 991, &policy));
+        assert!(take_process_rule_quota("rubric-a", 991, &policy));
+        assert!(!take_process_rule_quota("rubric-a", 991, &policy));
+        assert!(take_process_rule_quota("rubric-b", 991, &policy));
+    }
+
+    #[test]
+    fn concurrent_byte_reservations_cannot_cross_cap() {
+        let queued = AtomicUsize::new(0);
+        assert!(reserve_bytes(&queued, 6, 10));
+        assert!(!reserve_bytes(&queued, 5, 10));
+        assert_eq!(queued.load(Ordering::Acquire), 6);
     }
 
     #[test]
@@ -754,6 +892,42 @@ mod tests {
     }
 
     #[test]
+    fn writer_without_selected_record_creates_no_empty_file() {
+        let directory = temp_dir("capture-empty");
+        let writer = CaptureWriter::new(&directory, CapturePolicy::default()).unwrap();
+        let stats = writer.close();
+        assert_eq!(stats.written, 0);
+        assert_eq!(stats.dropped, 0);
+        assert_eq!(stats.errors, 0);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn directory_cap_evicts_finalized_file_and_preserves_active_writer() {
+        let directory = temp_dir("capture-cap-resume");
+        fs::create_dir_all(&directory).unwrap();
+        let old = directory.join(format!("{OWNED_PREFIX}old{OWNED_SUFFIX}"));
+        let other_active = directory.join(format!("{OWNED_PREFIX}other{OWNED_SUFFIX}.active"));
+        fs::write(&old, vec![b'x'; 90]).unwrap();
+        fs::write(&other_active, b"y").unwrap();
+        let policy = CapturePolicy {
+            directory_bytes: 128,
+            record_bytes: 128,
+            file_bytes: 128,
+            shutdown: Duration::from_secs(1),
+            ..CapturePolicy::default()
+        };
+        let writer = CaptureWriter::new(&directory, policy.clone()).unwrap();
+        assert!(writer.enqueue(Some(json!({"value": "z".repeat(30)}))));
+        let stats = writer.close();
+        assert_eq!(stats.written, 1);
+        assert!(!old.exists());
+        assert!(other_active.exists());
+        assert!(directory_size(&directory).unwrap() <= policy.directory_bytes as u64);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn oversize_is_dropped_and_prune_ignores_unrelated_files() {
         let directory = temp_dir("capture-prune");
         let policy = CapturePolicy {
@@ -764,6 +938,7 @@ mod tests {
         let writer = CaptureWriter::new(&directory, policy).unwrap();
         assert!(!writer.enqueue(Some(json!({"payload": "x".repeat(100)}))));
         assert!(writer.close().dropped >= 1);
+        fs::create_dir_all(&directory).unwrap();
         let owned = directory.join(format!("{OWNED_PREFIX}old{OWNED_SUFFIX}"));
         let unrelated = directory.join("unrelated.jsonl");
         fs::write(&owned, b"{}\n").unwrap();
@@ -797,5 +972,67 @@ mod tests {
         assert!(stats.errors >= 1);
         assert!(stats.dropped >= 1);
         fs::remove_file(directory).unwrap();
+    }
+
+    #[test]
+    fn inherited_writer_pid_is_rejected() {
+        let directory = temp_dir("capture-fork-pid");
+        let mut writer = CaptureWriter::new(&directory, CapturePolicy::default()).unwrap();
+        writer.pid = writer.pid.wrapping_add(1);
+        assert!(!writer.enqueue(Some(json!({"child": true}))));
+        assert_eq!(writer.close().dropped, 1);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn record_bytes_match_shared_cross_runtime_fixture() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let fixture: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("fixtures/capture-parity-input.json")).unwrap(),
+        )
+        .unwrap();
+        let result: JudgmentResult = serde_json::from_value(fixture["result"].clone()).unwrap();
+        let rubric = load_rubric(fixture["rubric_id"].as_str().unwrap()).unwrap();
+        let rubric_hash = rubric_content_hash(&rubric).unwrap();
+        assert_eq!(result.rubric_hash, rubric_hash);
+        let state = fixture["state"].clone();
+        let redact_paths = fixture["redact_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        let policy = CapturePolicy {
+            audit_rate: 1.0,
+            per_rule_rate: 0.0,
+            ..CapturePolicy::default()
+        };
+        let record = build_record(
+            &result,
+            &rubric,
+            &state,
+            &redact_paths,
+            fixture["captured_at"].as_str().unwrap(),
+            Some(fixture["runtime"].clone()),
+            0.0,
+            &policy,
+            &rubric_hash,
+        )
+        .unwrap();
+        assert_eq!(record["usage"], fixture["result"]["usage"]);
+        assert_eq!(
+            record["deterministic_gates"],
+            fixture["result"]["deterministic_gates"]
+        );
+        let mut actual = serde_json::to_vec(&record).unwrap();
+        actual.push(b'\n');
+        let expected = fs::read(root.join("fixtures/capture-record-v1.jsonl")).unwrap();
+        assert!(!actual
+            .windows(b"private@example.test".len())
+            .any(|window| window == b"private@example.test"));
+        assert!(!actual
+            .windows(b"secret-token".len())
+            .any(|window| window == b"secret-token"));
+        assert_eq!(actual, expected);
     }
 }

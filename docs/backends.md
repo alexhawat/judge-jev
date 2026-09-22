@@ -26,10 +26,12 @@ fails operationally before any verdict is published. Results record `backend`,
 recording, or canned demo.
 
 Recorded-answer judging requires a capture whose rubric id, rubric version, rubric
-content hash, and filtered state match the new request. This prevents unrelated
-answers from being presented as fresh evidence. The existing `replay` command still
-re-routes a saved judgment without a network call and records historical usage; it
-never reports those tokens as newly billed.
+content hash, requested/resolved model, and canonical unredacted filtered-state hash
+match the new request. The hash preserves this check when the stored state is
+redacted. Records without that content provenance are refused rather than guessed.
+This prevents unrelated answers from being presented as fresh evidence. The existing
+`replay` command still re-routes a saved judgment without a network call and records
+historical usage; it never reports those tokens as newly billed.
 
 Provider retries remain inside each live backend. Retryable failures are 408, 429,
 5xx, transport errors, and timeouts, under the shared maximum-retry and total-deadline

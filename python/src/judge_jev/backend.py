@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -60,6 +61,17 @@ class Backend(Protocol):
     ) -> BackendResponse: ...
 
 
+def validate_recorded_state(recorded: dict[str, Any], state: CanonicalState) -> None:
+    recorded_hash = recorded.get("state_hash")
+    if not isinstance(recorded_hash, str):
+        raise JudgeJevError(
+            "recorded replay needs an unredacted evaluated-content state_hash provenance"
+        )
+    current_hash = "sha256:" + hashlib.sha256(state.text.encode("utf-8")).hexdigest()
+    if recorded_hash != current_hash:
+        raise JudgeJevError("recorded replay state hash does not match the newly filtered input")
+
+
 def resolve_backend(explicit: str | None, *, mock: bool, environ: dict[str, str] | None = None) -> str:
     env = os.environ if environ is None else environ
     env_value = env.get("JUDGE_JEV_BACKEND")
@@ -111,14 +123,20 @@ class ReplayBackend:
             saved_version = self.recorded.get("rubric_version")
             if saved_version is None:
                 raise JudgeJevError("recorded replay needs rubric_version provenance")
+            recorded_requested = self.recorded.get("requested_model")
+            recorded_resolved = self.recorded.get("resolved_model") or self.recorded.get("model")
+            if recorded_requested is None or recorded_resolved is None:
+                raise JudgeJevError("recorded replay needs requested and resolved model provenance")
+            if str(recorded_requested) != model or str(recorded_resolved) != model:
+                raise JudgeJevError("recorded replay model provenance does not match the rubric pin")
             usage_data = self.recorded.get("usage") or {}
             usage = Usage(usage_data.get("input_tokens"), usage_data.get("output_tokens"))
-            resolved = str(self.recorded.get("resolved_model") or self.recorded.get("model") or model)
+            resolved = str(recorded_resolved)
             return BackendResponse(
                 normalize_answers(answers),
                 usage,
                 self.recorded.get("request_id"),
-                str(self.recorded.get("requested_model") or model),
+                str(recorded_requested),
                 resolved,
                 "recorded_model",
             )

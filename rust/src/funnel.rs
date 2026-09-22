@@ -1,5 +1,5 @@
 use crate::answers::validate_answers;
-use crate::backend::run_backend;
+use crate::backend::{run_backend, validate_recorded_state};
 use crate::budget::check_budget;
 use crate::canonical::{canonical_json, CanonicalState};
 use crate::capture::{build_record, random_fraction, utc_timestamp, CapturePolicy, CaptureWriter};
@@ -172,14 +172,12 @@ pub fn run_judgment_configured(
                     "recorded replay rubric id/version does not match the requested rubric"
                 );
             }
-            let captured_state = recorded
-                .get("state")
-                .cloned()
-                .ok_or_else(|| anyhow!("recorded replay needs captured filtered state to prove it belongs to this input"))?;
-            if CanonicalState::of(captured_state)?.text != state.text {
-                anyhow::bail!("recorded replay state does not match the newly filtered input");
-            }
-            if recorded.get("rubric_hash").and_then(Value::as_str) != Some(rubric_hash.as_str()) {
+            validate_recorded_state(&recorded, &state)?;
+            let recorded_rubric_hash = recorded
+                .get("rubric_hash")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("recorded replay needs rubric_hash provenance"))?;
+            if recorded_rubric_hash != rubric_hash {
                 anyhow::bail!("recorded replay rubric hash does not match the loaded rubric");
             }
         }

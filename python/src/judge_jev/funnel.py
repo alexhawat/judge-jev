@@ -10,7 +10,12 @@ from typing import Any
 from loguru import logger
 
 from judge_jev.answers import validate_answers
-from judge_jev.backend import BackendResponse, make_backend, validate_capabilities
+from judge_jev.backend import (
+    BackendResponse,
+    make_backend,
+    validate_capabilities,
+    validate_recorded_state,
+)
 from judge_jev.budget import check_budget
 from judge_jev.canonical import CanonicalState, strict_json_loads
 from judge_jev.gates import (
@@ -158,14 +163,11 @@ def run_judgment(
     if recorded is not None:
         if recorded.get("rubric_id") != rubric.id or str(recorded.get("rubric_version")) != rubric.version:
             raise JudgeJevError("recorded replay rubric id/version does not match the requested rubric")
-        recorded_state = recorded.get("state")
-        if recorded_state is None:
-            raise JudgeJevError(
-                "recorded replay needs captured filtered state to prove it belongs to this input"
-            )
-        if CanonicalState.of(recorded_state).text != state.text:
-            raise JudgeJevError("recorded replay state does not match the newly filtered input")
-        if recorded.get("rubric_hash") != rubric_content_hash(rubric):
+        validate_recorded_state(recorded, state)
+        recorded_rubric_hash = recorded.get("rubric_hash")
+        if not isinstance(recorded_rubric_hash, str):
+            raise JudgeJevError("recorded replay needs rubric_hash provenance")
+        if recorded_rubric_hash != rubric_content_hash(rubric):
             raise JudgeJevError("recorded replay rubric hash does not match the loaded rubric")
 
     # Before the request is built: an oversized state is a local failure, not a

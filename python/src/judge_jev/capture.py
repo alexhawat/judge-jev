@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import queue
@@ -16,12 +17,41 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from judge_jev.canonical import canonical_json
 from judge_jev.models import JudgmentResult, Rubric
 from judge_jev.rubric import rubric_content_hash
 
 CAPTURE_VERSION = 1
 OWNED_PREFIX = "judge-jev-capture-v1-"
 OWNED_SUFFIX = ".jsonl"
+
+# Sampling quotas belong to the process, not to one short-lived writer. This
+# matters for library callers that make many judgments in one process and create a
+# writer for each. The PID check resets inherited state after fork.
+_RULE_COUNTS_LOCK = threading.Lock()
+_RULE_COUNTS_PID = os.getpid()
+_PROCESS_RULE_COUNTS: dict[object, int] = {}
+
+
+def _process_rule_counts() -> dict[object, int]:
+    global _RULE_COUNTS_PID, _PROCESS_RULE_COUNTS
+    pid = os.getpid()
+    with _RULE_COUNTS_LOCK:
+        if pid != _RULE_COUNTS_PID:
+            _RULE_COUNTS_PID = pid
+            _PROCESS_RULE_COUNTS = {}
+        return _PROCESS_RULE_COUNTS
+
+
+def _reset_after_fork() -> None:
+    global _RULE_COUNTS_LOCK, _RULE_COUNTS_PID, _PROCESS_RULE_COUNTS
+    _RULE_COUNTS_LOCK = threading.Lock()
+    _RULE_COUNTS_PID = os.getpid()
+    _PROCESS_RULE_COUNTS = {}
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 @dataclass
@@ -166,7 +196,8 @@ def select_reasons(
     policy: CapturePolicy,
     *,
     rng: Callable[[], float] = random.random,
-    rule_counts: dict[int, int] | None = None,
+    rule_counts: dict[object, int] | None = None,
+    rule_namespace: str | None = None,
 ) -> list[str]:
     reasons: list[str] = []
     if rng() < policy.audit_rate:
@@ -193,11 +224,16 @@ def select_reasons(
     if (
         matched is not None
         and rule_counts is not None
-        and rule_counts.get(matched, 0) < policy.per_rule_quota
         and rng() < policy.per_rule_rate
     ):
-        reasons.append("rule_quota")
-        rule_counts[matched] = rule_counts.get(matched, 0) + 1
+        # The lock also makes the cap exact when multiple judgment threads share
+        # the process. Supplying a private dict remains useful for deterministic
+        # tests, and is harmless under the same lock.
+        with _RULE_COUNTS_LOCK:
+            rule_key: object = (rule_namespace, matched) if rule_namespace is not None else matched
+            if rule_counts.get(rule_key, 0) < policy.per_rule_quota:
+                reasons.append("rule_quota")
+                rule_counts[rule_key] = rule_counts.get(rule_key, 0) + 1
     return reasons
 
 
@@ -211,13 +247,22 @@ def build_record(
     runtime: dict[str, str] | None = None,
     policy: CapturePolicy | None = None,
     rng: Callable[[], float] = random.random,
-    rule_counts: dict[int, int] | None = None,
+    rule_counts: dict[object, int] | None = None,
 ) -> dict[str, Any] | None:
     policy = policy or CapturePolicy.from_env()
     margins = rule_margins(rubric, result.answers)
-    reasons = select_reasons(result, margins, policy, rng=rng, rule_counts=rule_counts)
+    reasons = select_reasons(
+        result,
+        margins,
+        policy,
+        rng=rng,
+        rule_counts=rule_counts,
+        rule_namespace=result.rubric_hash,
+    )
     if not reasons:
         return None
+    rubric_hash = rubric_content_hash(rubric)
+    state_hash = "sha256:" + hashlib.sha256(canonical_json(filtered_state).encode("utf-8")).hexdigest()
     timestamp = captured_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     return {
         "version": CAPTURE_VERSION,
@@ -225,7 +270,8 @@ def build_record(
         "trigger_reasons": reasons,
         "rubric_id": result.rubric_id,
         "rubric_version": result.rubric_version,
-        "rubric_hash": rubric_content_hash(rubric),
+        "rubric_hash": rubric_hash,
+        "state_hash": state_hash,
         "runtime": runtime or result.runtime.to_dict(),
         "backend": result.backend,
         "backend_provenance": result.backend_provenance,
@@ -233,11 +279,13 @@ def build_record(
         "model": result.model,
         "state": redact_state(filtered_state, redact_paths or []),
         "answers": result.answers,
+        "usage": result.usage.to_dict(),
         "verdict": result.verdict,
         "confidence": result.confidence,
         "confidence_floor": result.confidence_floor,
         "deciding_answers": result.deciding_answers,
         "routing_reason": result.routing_reason,
+        "deterministic_gates": [gate.to_dict() for gate in result.deterministic_gates],
         "rule_margins": margins,
     }
 
@@ -258,18 +306,21 @@ class CaptureWriter:
         self._failed = threading.Event()
         self._closed = False
         self._close_lock = threading.Lock()
-        self._rule_counts: dict[int, int] = {}
         self._thread = threading.Thread(target=self._run, name="judge-jev-capture", daemon=True)
         self._thread.start()
 
     @property
-    def rule_counts(self) -> dict[int, int]:
-        return self._rule_counts
+    def rule_counts(self) -> dict[object, int]:
+        return _process_rule_counts()
 
     def _prepare_directory(self) -> None:
         if self.directory.exists() and self.directory.is_symlink():
             raise OSError("capture directory must not be a symlink")
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Re-check after creation to close the ordinary check/create race. The
+        # capture file itself is also opened with O_NOFOLLOW below.
+        if self.directory.is_symlink() or not self.directory.is_dir():
+            raise OSError("capture directory must be a real directory")
         try:
             self.directory.chmod(0o700)
         except OSError:
@@ -325,19 +376,27 @@ class CaptureWriter:
                 self.stats.errors += 1
         return sorted(files, key=lambda item: (item[1].st_mtime_ns, item[0].name))
 
-    def _enforce_bounds(self) -> None:
+    def _enforce_bounds(self, incoming_bytes: int = 0) -> bool:
         files = self._owned_files()
-        total = sum(info.st_size for _, info in files)
-        while files and (len(files) > self.policy.retention_files or total > self.policy.directory_bytes):
-            victim, info = files.pop(0)
+        # Include every owned active file in the byte total, but only finalized
+        # files in the eviction set. This protects concurrent writers while still
+        # making enough room for the pending record instead of dropping forever
+        # whenever the directory happens to sit exactly at its cap.
+        total = self._directory_size()
+        while files and (
+            len(files) > self.policy.retention_files
+            or total + incoming_bytes > self.policy.directory_bytes
+        ):
+            victim, _info = files.pop(0)
             try:
                 victim.unlink()
-                total -= info.st_size
+                total = self._directory_size()
             except FileNotFoundError:
                 # Another process enforcing the same cap already removed it.
-                total -= info.st_size
+                total = self._directory_size()
             except OSError:
                 self.stats.errors += 1
+        return total + incoming_bytes <= self.policy.directory_bytes
 
     def _new_file(self) -> tuple[Any, Path, int]:
         name = f"{OWNED_PREFIX}{self.pid}-{time.time_ns()}-{uuid.uuid4().hex}{OWNED_SUFFIX}.active"
@@ -347,6 +406,12 @@ class CaptureWriter:
 
     def _finalize(self, handle: Any, active_path: Path) -> None:
         handle.close()
+        try:
+            if active_path.stat().st_size == 0:
+                active_path.unlink()
+                return
+        except FileNotFoundError:
+            return
         final_path = active_path.with_suffix("")
         os.replace(active_path, final_path)
 
@@ -369,11 +434,10 @@ class CaptureWriter:
         active_path = None
         size = 0
         active_pending = False
+        prepared = False
         try:
             # All filesystem work is on the background thread; constructing a
             # writer and enqueueing on the judgment path only touch memory.
-            self._prepare_directory()
-            handle, active_path, size = self._new_file()
             while not self._stop.is_set() or not self._queue.empty():
                 try:
                     item = self._queue.get(timeout=0.02)
@@ -382,12 +446,15 @@ class CaptureWriter:
                 with self._lock:
                     self._queued_bytes -= len(item)
                 active_pending = True
+                if not prepared:
+                    self._prepare_directory()
+                    prepared = True
+                    handle, active_path, size = self._new_file()
                 if size and size + len(item) > self.policy.file_bytes:
                     self._finalize(handle, active_path)
                     self._enforce_bounds()
                     handle, active_path, size = self._new_file()
-                self._enforce_bounds()
-                if self._directory_size() + len(item) > self.policy.directory_bytes:
+                if not self._enforce_bounds(len(item)):
                     self._complete_pending("dropped")
                     active_pending = False
                     continue
@@ -416,13 +483,23 @@ class CaptureWriter:
                     self._finalize(handle, active_path)
                 except OSError:
                     self.stats.errors += 1
-            try:
-                self._enforce_bounds()
-            except OSError:
-                self.stats.errors += 1
+            if prepared:
+                try:
+                    self._enforce_bounds()
+                except OSError:
+                    self.stats.errors += 1
             self._stop.set()
 
     def close(self) -> CaptureStats:
+        if os.getpid() != self.pid:
+            # No thread survives fork except the caller. In particular, inherited
+            # locks and the Thread object cannot safely be acquired or joined.
+            # This process owns only its private memory copy, so account for that
+            # copy and return without touching any synchronization primitive.
+            self.stats.dropped += self._pending_records
+            self._pending_records = 0
+            self._closed = True
+            return self.stats
         with self._close_lock:
             if self._closed:
                 return self.stats
