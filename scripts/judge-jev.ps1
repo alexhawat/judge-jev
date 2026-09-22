@@ -55,7 +55,7 @@ switch ($Runtime) {
         }
         # Always reconcile with the lock; an existing executable does not prove
         # dependencies still match this checkout.
-        uv sync --project (Join-Path $Root "python") --locked --extra tracing --quiet
+        uv sync --project (Join-Path $Root "python") --locked --inexact --quiet
         if ($LASTEXITCODE -ne 0) { exit 10 }
         # Resolve after sync: on a fresh Windows checkout the executable did not
         # exist before uv created .venv/Scripts.

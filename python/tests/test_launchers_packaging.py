@@ -206,7 +206,7 @@ def test_existing_python_environment_is_reconciled_with_lock(tmp_path: Path) -> 
     assert run_launcher(root, env, "run").returncode == 0
     invocation = Path(env["FAKE_LOG"] + ".tools").read_text()
     assert "uv sync --project" in invocation
-    assert "--locked --extra tracing" in invocation
+    assert "--locked --inexact --quiet" in invocation
 
 
 def test_setup_updates_preference_only_after_install_and_smoke(tmp_path: Path) -> None:
