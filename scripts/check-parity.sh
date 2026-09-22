@@ -767,6 +767,19 @@ else
   echo "ok   no-retry-4xx: both gave up after 1 attempt"
 fi
 
+# Dynamic timestamps and runtime identities intentionally differ in production.
+# With those fixed by the shared fixture, both record builders must emit the same
+# complete canonical JSONL bytes, including nested redaction and gate/usage evidence.
+if (cd "$ROOT/python" && uv run pytest -q \
+  tests/test_backend_capture.py::test_capture_record_bytes_match_shared_cross_runtime_fixture) \
+  && (cd "$ROOT/rust" && cargo test --quiet --lib \
+    capture::tests::record_bytes_match_shared_cross_runtime_fixture); then
+  echo "ok   capture-record-v1: both runtimes match the shared canonical bytes"
+else
+  echo "FAIL capture-record-v1: canonical capture fixture mismatch" >&2
+  failed=1
+fi
+
 if [[ "$failed" != 0 ]]; then
   echo "runtime parity check failed" >&2
   exit 1
