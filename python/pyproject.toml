@@ -16,6 +16,10 @@ tracing = [
 ]
 tuning = [
     "gepa==0.1.4",
+    # GEPA's string-model LM imports LiteLLM lazily but the base package declares
+    # no dependencies. Match GEPA 0.1.4's supported range without its unrelated
+    # full extra.
+    "litellm>=1.83,<1.92",
 ]
 
 [dependency-groups]

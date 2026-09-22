@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import threading
 from collections.abc import Callable
@@ -122,6 +123,13 @@ class CallLimitedLM:
     def total_tokens_out(self) -> int | None:
         value = getattr(self.lm, "total_tokens_out", None)
         return value if type(value) is int else None
+
+
+class _StderrLogger:
+    """Keep GEPA progress out of the CLI's machine-readable stdout."""
+
+    def log(self, message: str) -> None:
+        print(message, file=sys.stderr)
 
 
 @contextmanager
@@ -606,7 +614,11 @@ def instruction_proposal(
             max_metric_calls=optimization_budget,
             # GEPA checks stoppers between iterations, while one new iteration can
             # schedule a whole train batch. Stop before that batch cannot fit.
-            stop_callbacks=lambda _state: ledger.metric_calls + len(train) > optimization_budget,
+            stop_callbacks=lambda _state: (
+                ledger.metric_calls + len(train) > optimization_budget
+                or reflection_lm.calls >= reflection_lm.max_calls
+            ),
+            logger=_StderrLogger(),
             seed=seed,
             cache_evaluation=True,
             display_progress_bar=False,
@@ -699,6 +711,29 @@ def instruction_proposal(
         (item for item in candidate_reports if item["candidate_index"] == best_index),
         candidate_reports[0] if candidate_reports else None,
     )
+    reflection_tokens_in = reflection_lm.total_tokens_in
+    reflection_tokens_out = reflection_lm.total_tokens_out
+    reflection_cost = reflection_lm.total_cost
+    if reflection_lm.calls == 0:
+        reflection_tokens = 0
+        reflection_token_measurement = "not-used"
+        reflection_cost_usd = 0.0
+        reflection_cost_measurement = "not-used"
+    else:
+        reflection_tokens = (
+            None
+            if reflection_tokens_in is None
+            or reflection_tokens_out is None
+            or reflection_tokens_in + reflection_tokens_out == 0
+            else reflection_tokens_in + reflection_tokens_out
+        )
+        reflection_token_measurement = (
+            "unavailable" if reflection_tokens is None else "provider-reported post-response"
+        )
+        reflection_cost_usd = None if reflection_cost in (None, 0) else reflection_cost
+        reflection_cost_measurement = (
+            "unavailable" if reflection_cost_usd is None else "LiteLLM post-response estimate"
+        )
     plan.update(
         {
             "api_calls": ledger.metric_calls,
@@ -710,12 +745,13 @@ def instruction_proposal(
             "reflector_retries": 0,
             "task_tokens": ledger.actual_tokens if ledger.usage_complete else None,
             "task_token_measurement": "complete" if ledger.usage_complete else "unavailable",
-            "reflection_tokens": (
-                None
-                if reflection_lm.total_tokens_in is None or reflection_lm.total_tokens_out is None
-                else reflection_lm.total_tokens_in + reflection_lm.total_tokens_out
-            ),
-            "reflection_cost_usd": reflection_lm.total_cost,
+            # GEPA/LiteLLM collapses missing post-response usage and cost to zero.
+            # After a call, zero therefore means unavailable rather than verified
+            # free usage; non-zero values remain post-response estimates.
+            "reflection_tokens": reflection_tokens,
+            "reflection_token_measurement": reflection_token_measurement,
+            "reflection_cost_usd": reflection_cost_usd,
+            "reflection_cost_measurement": reflection_cost_measurement,
             "hard_token_or_dollar_cap": False,
             "gepa_total_metric_calls": getattr(result, "total_metric_calls", None),
             "best_score": getattr(result, "best_score", None),

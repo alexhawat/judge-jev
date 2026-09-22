@@ -28,6 +28,13 @@ trajectories; `make_reflective_dataset` converts real traces into feedback recor
 The integration implements those methods and invokes the actual optional package. It
 does not label a custom mutation loop as GEPA.
 
+GEPA 0.1.4's base package declares no dependencies, while its string-model `LM`
+imports LiteLLM lazily. The tuning extra therefore includes LiteLLM in GEPA's own
+supported `>=1.83,<1.92` range without installing GEPA's unrelated full extra. An
+offline contract test executes that lazy import and completion path. LiteLLM usage
+and cost are post-response observations; GEPA converts missing values to zero, so
+Judge Jev reports zero totals after a reflector call as unavailable rather than free.
+
 Neither verified Jev provider contract exposes a request-level hard output-token
 limit. A client can observe usage only after a paid response, which is too late to
 guarantee the requested cap; GEPA's reflector cost stopper is also post-response.

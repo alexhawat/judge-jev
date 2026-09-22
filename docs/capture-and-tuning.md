@@ -165,15 +165,19 @@ The adapter reserves model-evaluation calls for a baseline and a bounded candida
 subset across train, held-out, and frozen-red-team splits before GEPA starts. It
 checks the model and reflector counters before dispatch and disables retries, so one
 authorized call cannot silently become several. Token usage and reflector cost are
-reported when providers expose them, but they are measurements rather than caps.
+reported when providers expose them, but they are post-response measurements or
+estimates rather than caps. GEPA/LiteLLM represents missing reflector usage or cost
+as zero; after a reflector call Judge Jev therefore reports such zero totals as
+unavailable instead of claiming that the call was free.
 
 The verified TypeSafe and Cloudflare Jev contracts do not currently expose a
 provider-enforced output-token limit. Post-response usage cannot enforce a hard cap
 because the spend has already happened, and GEPA observes reflector cost after a
 request. `--budget-mode hard-spend` therefore refuses before the first provider,
 reflector, or optimizer call. Supplying token/dollar flags in call-count mode also
-fails instead of silently weakening the requested guarantee. The pinned GEPA path is
-tested with offline evaluators and reflectors; no paid call was made here.
+fails instead of silently weakening the requested guarantee. The pinned GEPA path,
+including its string-model LiteLLM adapter, is tested with an offline fake
+completion; no paid call was made here.
 
 Only one question's instruction text is mutable. Question id, type, scale/criteria,
 routing numerics, and all other questions remain fixed. Reflection examples contain

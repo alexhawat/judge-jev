@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -369,12 +370,29 @@ def test_actual_pinned_gepa_optimize_exercises_adapter_and_reflection() -> None:
 
 
 def test_public_call_budget_mode_runs_actual_pinned_gepa_offline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     pytest.importorskip("gepa")
+    litellm = pytest.importorskip("litellm")
     cases = tmp_path / "cases.jsonl"
     _cases(cases)
     monkeypatch.setenv("JUDGE_JEV_MAX_RETRIES", "7")
+    completions = []
+
+    def completion(**kwargs):
+        completions.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(content="```better```"),
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=17, completion_tokens=3),
+        )
+
+    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setattr(litellm, "completion_cost", lambda **_kwargs: 0.125)
 
     def evaluator(row, instruction):
         predicted = row["expected_verdict"] if instruction == "better" else "review"
@@ -396,7 +414,7 @@ def test_public_call_budget_mode_runs_actual_pinned_gepa_offline(
         budget_mode="calls",
         metric_budget=60,
         reflection_call_budget=1,
-        reflection_model=lambda _prompt: "```better```",
+        reflection_model="fake/offline",
         minimum_support=1,
         evaluator=evaluator,
         seed=1,
@@ -404,6 +422,12 @@ def test_public_call_budget_mode_runs_actual_pinned_gepa_offline(
     assert report["status"] == "proposal generated for review"
     assert report["api_calls"] <= 60
     assert report["reflection_calls"] == 1
+    assert report["reflection_tokens"] == 20
+    assert report["reflection_token_measurement"] == "provider-reported post-response"
+    assert report["reflection_cost_usd"] == 0.125
+    assert report["reflection_cost_measurement"] == "LiteLLM post-response estimate"
+    assert completions and completions[0]["model"] == "fake/offline"
+    assert completions[0]["num_retries"] == 0
     assert report["provider_retries"] == 0
     assert report["hard_token_or_dollar_cap"] is False
     assert "better" in report["diff"]
@@ -413,3 +437,6 @@ def test_public_call_budget_mode_runs_actual_pinned_gepa_offline(
         for candidate in report["candidate_proposals"]
     )
     assert __import__("os").environ["JUDGE_JEV_MAX_RETRIES"] == "7"
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Iteration" in captured.err
