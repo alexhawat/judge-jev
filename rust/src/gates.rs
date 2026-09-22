@@ -1,6 +1,6 @@
 //! Deterministic pre- and post-route gates recorded on every JudgmentResult.
 
-use crate::models::{GateOutcome, GATED_VERDICTS, Rubric, StatePath, StateProjection};
+use crate::models::{GateOutcome, Rubric, StatePath, StateProjection, GATED_VERDICTS};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -20,9 +20,7 @@ pub fn state_projection_hash(paths: &[String]) -> String {
 fn compact_json_array(items: &[String]) -> String {
     let inner = items
         .iter()
-        .map(|item| {
-            serde_json::to_string(item).unwrap_or_else(|_| "\"\"".to_string())
-        })
+        .map(|item| serde_json::to_string(item).unwrap_or_else(|_| "\"\"".to_string()))
         .collect::<Vec<_>>()
         .join(",");
     format!("[{inner}]")
@@ -74,9 +72,8 @@ fn sha256(data: &[u8]) -> [u8; 32] {
                 .wrapping_add(w[i - 7])
                 .wrapping_add(s1);
         }
-        let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh) = (
-            h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
-        );
+        let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh) =
+            (h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
         for i in 0..64 {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ ((!e) & g);
