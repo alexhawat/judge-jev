@@ -107,6 +107,10 @@ def test_runtime_precedence_and_python_only_commands(tmp_path: Path) -> None:
     env["JUDGE_JEV_RUNTIME"] = "rust"
     assert run_launcher(root, env, "doctor").returncode == 0
     assert Path(env["FAKE_LOG"] + ".runtime").read_text() == "python\n"
+    assert run_launcher(root, env, "--verbose", "reply").returncode == 0
+    assert Path(env["FAKE_LOG"] + ".runtime").read_text() == "python\n"
+    assert run_launcher(root, env, "run", "--format", "human").returncode == 0
+    assert Path(env["FAKE_LOG"] + ".runtime").read_text() == "python\n"
     runtime.unlink()
     env.pop("JUDGE_JEV_RUNTIME")
     assert run_launcher(root, env, "run").returncode == 0
@@ -139,7 +143,7 @@ def test_non_tty_no_args_does_not_prompt_and_tty_uses_python(tmp_path: Path) -> 
     assert Path(env["FAKE_LOG"] + ".runtime").read_text() == "python\n"
 
 
-@pytest.mark.parametrize("exit_code", [0, 1, 2, 3, 4, 11])
+@pytest.mark.parametrize("exit_code", [0, 1, 2, 3, 4, 10, 11])
 def test_preserves_runtime_exit_codes(tmp_path: Path, exit_code: int) -> None:
     root = isolated_root(tmp_path)
     tools = fake_tools(tmp_path)
@@ -193,6 +197,16 @@ def test_bootstrap_failures_map_to_ten_and_rust_build_runs(tmp_path: Path) -> No
     env = environment(tmp_path / "ok", tools, JUDGE_JEV_RUNTIME="rust")
     assert run_launcher(root, env, "run").returncode == 0
     assert "cargo build --manifest-path" in Path(env["FAKE_LOG"] + ".tools").read_text()
+
+
+def test_existing_python_environment_is_reconciled_with_lock(tmp_path: Path) -> None:
+    root = isolated_root(tmp_path)
+    tools = fake_tools(tmp_path)
+    env = environment(tmp_path, tools, JUDGE_JEV_RUNTIME="python")
+    assert run_launcher(root, env, "run").returncode == 0
+    invocation = Path(env["FAKE_LOG"] + ".tools").read_text()
+    assert "uv sync --project" in invocation
+    assert "--locked --extra tracing" in invocation
 
 
 def test_setup_updates_preference_only_after_install_and_smoke(tmp_path: Path) -> None:

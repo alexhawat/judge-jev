@@ -1,6 +1,7 @@
-# OpenClaw adapter
+# OpenClaw adapter (manual / experimental)
 
-OpenClaw workflows can register a post-response judge step.
+This is an unverified manual pattern, not a tested OpenClaw host contract or
+enforcement gate. OpenClaw workflows can register a post-response judge step.
 
 ## Stub integration
 

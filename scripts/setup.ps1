@@ -1,5 +1,4 @@
 param(
-    [ValidateSet("python", "rust", "")]
     [string]$Runtime = $env:JUDGE_JEV_RUNTIME
 )
 
@@ -18,6 +17,13 @@ function Write-ErrLine([string]$Message) {
     [Console]::Error.WriteLine($Message)
 }
 
+# Convert terminating filesystem/process errors into the shared operational code.
+# Explicit `exit 11` usage paths below do not trigger this trap.
+trap {
+    Write-ErrLine ("judge-jev setup failed: " + $_.Exception.Message)
+    exit 10
+}
+
 $Root = Split-Path -Parent $PSScriptRoot
 $env:JUDGE_JEV_ROOT = $Root
 
@@ -31,6 +37,10 @@ if (-not $Runtime) {
         $choice = Read-Host "Enter 1 or 2 [1]"
         $Runtime = switch ($choice) { "" { "python" } "1" { "python" } "2" { "rust" } default { Write-ErrLine "Choose 1 or 2."; exit 11 } }
     }
+}
+if ($Runtime -notin @("python", "rust")) {
+    Write-ErrLine "Unknown runtime: $Runtime (use python or rust)"
+    exit 11
 }
 
 switch ($Runtime) {
@@ -89,14 +99,15 @@ switch ($Runtime) {
 }
 
 $ConfigDir = Join-Path $Root ".judge-jev"
-New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
-$TempRuntime = Join-Path $ConfigDir ("runtime.tmp." + [guid]::NewGuid().ToString("N"))
-Set-Content -Path $TempRuntime -Value $Runtime
-$RuntimeFile = Join-Path $ConfigDir "runtime"
+$TempRuntime = $null
 try {
+    New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    $TempRuntime = Join-Path $ConfigDir ("runtime.tmp." + [guid]::NewGuid().ToString("N"))
+    Set-Content -Path $TempRuntime -Value $Runtime
+    $RuntimeFile = Join-Path $ConfigDir "runtime"
     [System.IO.File]::Move($TempRuntime, $RuntimeFile, $true)
 } finally {
-    if (Test-Path $TempRuntime) { Remove-Item -Force $TempRuntime }
+    if ($TempRuntime -and (Test-Path $TempRuntime)) { Remove-Item -Force $TempRuntime }
 }
 
 Write-Host "Configured runtime=$Runtime at $(Join-Path $Root '.judge-jev/runtime')"

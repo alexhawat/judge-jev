@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alexhawat/judge-jev/shared/schemas/judgment-result.schema.json",
+  "title": "JudgmentResult",
+  "description": "Structured output from judge-jev run/replay",
+  "type": "object",
+  "required": [
+    "rubric_id",
+    "rubric_version",
+    "rubric_hash",
+    "source_rubric_version",
+    "source_rubric_hash",
+    "verdict",
+    "confidence",
+    "stage",
+    "model",
+    "usage",
+    "answers",
+    "routing_reason",
+    "mock",
+    "deciding_answers",
+    "confidence_floor",
+    "runtime",
+    "state_projection",
+    "deterministic_gates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "rubric_id": { "type": "string" },
+    "rubric_version": {
+      "type": "string",
+      "description": "The rubric version in force when this judgment was made. `replay` compares it against the rubric on disk and refuses on a mismatch, so a threshold change cannot silently re-decide a past verdict."
+    },
+    "rubric_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Hash of the complete effective rubric content used to route this result."
+    },
+    "source_rubric_version": {
+      "type": ["string", "null"],
+      "description": "Rubric version under which the saved model answers were originally collected."
+    },
+    "source_rubric_hash": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Rubric content hash under which the saved model answers were originally collected; null for legacy results."
+    },
+    "runtime": {
+      "type": "object",
+      "description": "The build that produced this result. The two runtimes must agree on every other field; this is the one they are supposed to differ on.",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "enum": ["python", "rust"] },
+        "version": { "type": "string" }
+      }
+    },
+    "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Certainty of the answers that produced this verdict: the minimum over deciding_answers. 0 when no rule-bound answer decided it. This is not a probability that the verdict is correct."
+    },
+    "confidence_floor": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "The floor an automatic pass/fail had to clear, from the rubric's confidence_floors[stakes]."
+    },
+    "deciding_answers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Answer IDs the matched rule read. Only these contribute to confidence."
+    },
+    "stage": { "type": "string", "enum": ["screen", "profile", "locate", "score", "route"] },
+    "model": {
+      "type": "string",
+      "description": "The model that answered, as the API reported it — not necessarily the model the rubric asked for, since the API may resolve an alias. Under --mock nothing answers, so it is the requested model (jev-1.13.0)."
+    },
+    "state_projection": {
+      "type": "object",
+      "description": "Allowlisted state_filter paths and the top-level keys that survived filtering.",
+      "required": ["paths", "hash", "projected_keys"],
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Sorted path strings from the rubric state_filter."
+        },
+        "hash": {
+          "type": "string",
+          "description": "Stable sha256 hash of the sorted paths list."
+        },
+        "projected_keys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Top-level keys present in the filtered state sent to Jev."
+        }
+      }
+    },
+    "deterministic_gates": {
+      "type": "array",
+      "description": "Outcomes of deterministic checks run in code (not Jev). Always present.",
+      "items": {
+        "type": "object",
+        "required": ["gate_id", "outcome", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "gate_id": { "type": "string" },
+          "outcome": { "type": "string", "enum": ["pass", "fail", "skip"] },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "description": "Token counts. Both fields are always present and are null when the API reported none, so a result has one shape whichever runtime produced it.",
+      "properties": {
+        "input_tokens": { "type": ["integer", "null"] },
+        "output_tokens": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "answers": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "noul"],
+            "properties": {
+              "type": { "const": "noul" },
+              "noul": { "type": "number", "minimum": 0, "maximum": 1 }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["type", "choice", "confidence", "probabilities"],
+            "properties": {
+              "type": { "const": "choice" },
+              "choice": { "type": "string" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": { "type": "number" }
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["type", "score", "confidence", "probabilities"],
+            "properties": {
+              "type": { "const": "score" },
+              "score": { "type": "number" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "legend": {
+                "type": "object",
+                "description": "Score levels keyed by level number, as returned by the API so a score can be interpreted.",
+                "additionalProperties": true
+              },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": { "type": "number" }
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "routing_reason": { "type": "string" },
+    "mock": { "type": "boolean" },
+    "request_id": { "type": ["string", "null"] }
+  }
+}

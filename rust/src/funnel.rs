@@ -1,6 +1,6 @@
 use crate::answers::validate_answers;
 use crate::budget::check_budget;
-use crate::canonical::CanonicalState;
+use crate::canonical::{canonical_json, CanonicalState};
 use crate::gates::{
     build_state_projection, escalate_on_injection, evaluate_gates, evaluate_replay_gates,
     GateContext,
@@ -59,6 +59,12 @@ pub fn load_input(path: &Path) -> Result<Value> {
     let text = read_input_text(path)?;
     let value: Value = serde_json::from_str(&text)
         .map_err(|e| anyhow!("input {} is not valid JSON: {e}", path.display()))?;
+    // arbitrary_precision keeps large integers exact, but it also lets a decimal
+    // such as 1e999 parse even though Python's numeric domain cannot represent it.
+    // Validate the complete document before filtering so an unselected value
+    // cannot make runtime acceptance diverge.
+    canonical_json(&value)
+        .map_err(|e| anyhow!("input {} is not valid JSON: {e}", path.display()))?;
     if !value.is_object() {
         let kind = match &value {
             Value::Null => "null",
@@ -73,10 +79,48 @@ pub fn load_input(path: &Path) -> Result<Value> {
     Ok(value)
 }
 
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn validate_shipped_input_shape(rubric_id: &str, raw: &Value) -> Result<()> {
+    let expected: &[(&str, &str)] = match rubric_id {
+        "assistant-reply" => &[("prompt", "string"), ("reply", "string")],
+        "agent-trajectory" => &[
+            ("goal", "string"),
+            ("steps", "array"),
+            ("final_output", "string"),
+        ],
+        _ => return Ok(()),
+    };
+    for (name, wanted) in expected {
+        if let Some(value) = raw.get(*name) {
+            let valid = value.is_null()
+                || (*wanted == "string" && value.is_string())
+                || (*wanted == "array" && value.is_array());
+            if !valid {
+                anyhow::bail!(
+                    "input field '{name}' must be a {wanted} or null, got {}",
+                    json_kind(value)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Result<JudgmentResult> {
     let rubric = load_rubric(rubric_id)?;
     let rubric_hash = rubric_content_hash(&rubric)?;
     let raw = load_input(input_path)?;
+    validate_shipped_input_shape(&rubric.id, &raw)?;
     // Canonical from here on: every request is built from these exact bytes, and
     // both runtimes build the same ones.
     let filtered = filter_state(&raw, &rubric.state_filter)?;

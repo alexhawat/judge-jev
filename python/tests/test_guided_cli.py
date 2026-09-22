@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
 from judge_jev.cli import EXIT_USAGE, main
 from judge_jev.history import delete_all, list_entries, save_result
+from judge_jev.guided import _multiline
 
 
 def test_no_args_non_tty_is_usage_without_prompt(capsys) -> None:
@@ -14,6 +17,12 @@ def test_no_args_non_tty_is_usage_without_prompt(capsys) -> None:
     captured = capsys.readouterr()
     assert "a command is required" in captured.err
     assert captured.out == ""
+
+
+def test_multiline_keyboard_cancel_is_clean(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("builtins.input", lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
+    assert _multiline("reply") == ""
+    assert "Finish with" in capsys.readouterr().err
 
 
 def test_reply_mock_human_and_json(capsys) -> None:
@@ -43,22 +52,27 @@ def test_reply_required_values_are_usage_errors(capsys) -> None:
 def test_reply_editor_uses_direct_argv_and_json_document(tmp_path: Path, monkeypatch, capsys) -> None:
     editor = tmp_path / "editor helper.py"
     editor.write_text(
-        "import json, pathlib, sys\n"
+        "import json, pathlib, sys\nprint('editor status')\n"
         "pathlib.Path(sys.argv[-1]).write_text(json.dumps({"
         "'prompt': 'p', 'reply': 'r', 'context': 'c'}), encoding='utf-8')\n",
         encoding="utf-8",
     )
     marker = tmp_path / "must-not-exist"
-    monkeypatch.setenv("EDITOR", f"{sys.executable} '{editor}' ; touch '{marker}'")
+    quote = subprocess.list2cmdline if os.name == "nt" else shlex.join
+    monkeypatch.setenv(
+        "EDITOR", quote([sys.executable, str(editor), ";", "touch", str(marker)])
+    )
     # The semicolon and following words are ordinary arguments, never interpreted
     # by a shell, so the helper still edits the final path without creating marker.
     assert main(["reply", "--editor", "--mock"]) == 0
     assert not marker.exists()
     capsys.readouterr()
 
-    monkeypatch.setenv("EDITOR", f"{sys.executable} '{editor}'")
+    monkeypatch.setenv("EDITOR", quote([sys.executable, str(editor)]))
     assert main(["reply", "--editor", "--mock", "--format", "json"]) == 0
-    assert json.loads(capsys.readouterr().out)["verdict"] == "pass"
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["verdict"] == "pass"
+    assert "editor status" not in captured.out
 
 
 def test_input_template_and_validation_are_offline(tmp_path: Path, capsys) -> None:
@@ -72,6 +86,16 @@ def test_input_template_and_validation_are_offline(tmp_path: Path, capsys) -> No
     report = json.loads(capsys.readouterr().out)
     assert report["valid"] is True
     assert report["network_used"] is False
+
+    missing = tmp_path / "missing.json"
+    missing.write_text(json.dumps({"prompt": "hello"}), encoding="utf-8")
+    assert main(["input", "validate", "--rubric", "assistant-reply", "--input", str(missing)]) == EXIT_USAGE
+    assert "non-empty reply" in capsys.readouterr().err
+
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text(json.dumps({"prompt": "hello", "reply": ["wrong"]}), encoding="utf-8")
+    assert main(["input", "validate", "--rubric", "assistant-reply", "--input", str(malformed)]) == 10
+    assert "must be a string" in capsys.readouterr().err
 
 
 def test_history_is_opt_in_result_only_and_explicitly_deleted(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -95,7 +119,8 @@ def test_history_is_opt_in_result_only_and_explicitly_deleted(tmp_path: Path, mo
     stored = saved_path.read_text(encoding="utf-8")
     assert secret_prompt not in stored
     assert secret_reply not in stored
-    assert saved_path.stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert saved_path.stat().st_mode & 0o777 == 0o600
 
     assert main(["explain", "--history-id", history_id, "--format", "json"]) == 0
     explanation = json.loads(capsys.readouterr().out)
@@ -149,7 +174,10 @@ def test_history_retention_and_delete_ignore_unowned_or_malformed_files(tmp_path
     malformed = root / "20260922T120000000001Z-deadbeef.json"
     malformed.write_text(json.dumps({"history_id": malformed.stem, "result": []}), encoding="utf-8")
     if hasattr(os, "symlink"):
-        os.symlink(outside, root / "20260922T120000000002Z-deadbeef.json")
+        try:
+            os.symlink(outside, root / "20260922T120000000002Z-deadbeef.json")
+        except OSError:
+            pass
 
     monkeypatch.setattr("judge_jev.history.RETENTION_LIMIT", 0)
     save_result({"verdict": "pass", "rubric_id": "assistant-reply", "mock": True})

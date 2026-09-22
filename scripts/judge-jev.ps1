@@ -18,6 +18,11 @@ function Write-ErrLine([string]$Message) {
     [Console]::Error.WriteLine($Message)
 }
 
+trap {
+    Write-ErrLine ("judge-jev launcher failed: " + $_.Exception.Message)
+    exit 10
+}
+
 $Root = Split-Path -Parent $PSScriptRoot
 $env:JUDGE_JEV_ROOT = $Root
 $RuntimeFile = Join-Path $Root ".judge-jev/runtime"
@@ -31,7 +36,15 @@ if ($env:JUDGE_JEV_RUNTIME) {
 }
 
 $Guided = @("init", "doctor", "reply", "trajectory", "input", "explain", "history")
-if ($args.Count -gt 0 -and $Guided -contains $args[0]) { $Runtime = "python" }
+$Command = $null
+$Previous = $null
+foreach ($ArgValue in $args) {
+    if ($Previous -eq "--format" -and $ArgValue -eq "human") { $Runtime = "python" }
+    $Previous = $ArgValue
+    if ($ArgValue -in @("--verbose", "--debug")) { continue }
+    if (-not $Command) { $Command = $ArgValue }
+}
+if ($Command -and $Guided -contains $Command) { $Runtime = "python" }
 if ($args.Count -eq 0 -and -not [Console]::IsInputRedirected) { $Runtime = "python" }
 
 switch ($Runtime) {
@@ -44,10 +57,10 @@ switch ($Runtime) {
         $PyBinCmd = Join-Path $Root "python/.venv/Scripts/judge-jev.cmd"
         $PyBinPlain = Join-Path $Root "python/.venv/bin/judge-jev"
         $PyBin = if (Test-Path $PyBinExe) { $PyBinExe } elseif (Test-Path $PyBinCmd) { $PyBinCmd } else { $PyBinPlain }
-        if (-not (Test-Path $PyBin)) {
-            uv sync --project (Join-Path $Root "python") --locked
-            if ($LASTEXITCODE -ne 0) { exit 10 }
-        }
+        # Always reconcile with the lock; an existing executable does not prove
+        # dependencies still match this checkout.
+        uv sync --project (Join-Path $Root "python") --locked --extra tracing
+        if ($LASTEXITCODE -ne 0) { exit 10 }
         if (-not (Test-Path $PyBin)) {
             Write-ErrLine "judge-jev: Python bootstrap did not install $PyBin"
             exit 10

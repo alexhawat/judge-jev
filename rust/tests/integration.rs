@@ -485,6 +485,43 @@ fn numeric_policy_values_are_typed_but_unreachable_thresholds_are_valid() {
 }
 
 #[test]
+fn empty_and_malformed_shipped_inputs_have_stable_semantics() {
+    let directory = std::env::temp_dir().join(format!("judge-jev-input-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let empty = directory.join("empty.json");
+    std::fs::write(&empty, r#"{"prompt":"question","reply":"","context":""}"#).unwrap();
+    assert_eq!(
+        run_judgment("assistant-reply", &empty, true)
+            .unwrap()
+            .verdict,
+        "skip"
+    );
+
+    let malformed = directory.join("malformed.json");
+    std::fs::write(
+        &malformed,
+        r#"{"goal":"g","steps":"not a list","final_output":"done"}"#,
+    )
+    .unwrap();
+    let error = run_judgment("agent-trajectory", &malformed, true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("input field 'steps'"), "{error}");
+
+    let overflow = directory.join("overflow.json");
+    std::fs::write(
+        &overflow,
+        r#"{"prompt":"p","reply":"r","unselected":1e999}"#,
+    )
+    .unwrap();
+    let error = run_judgment("assistant-reply", &overflow, true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not valid JSON"), "{error}");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn thresholds_come_from_the_rubric_not_the_code() {
     // The previous implementation matched on substrings of the rule text and used
     // hardcoded thresholds, so editing the shared YAML changed nothing here. Editing
@@ -627,6 +664,27 @@ fn usage_errors_exit_11_and_say_why() {
             stderr.contains(message),
             "args {args:?} stderr {stderr} missing {message}"
         );
+    }
+}
+
+#[test]
+fn root_and_per_command_help_succeed_without_a_key() {
+    for args in [
+        vec!["--help"],
+        vec!["run", "--help"],
+        vec!["replay", "-h"],
+        vec!["rubric", "show", "--help"],
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_judge-jev"))
+            .args(&args)
+            .env("JUDGE_JEV_ROOT", repo())
+            .env_remove("TYPESAFE_API_KEY")
+            .output()
+            .expect("run help");
+        assert!(out.status.success(), "help failed for {args:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("usage:") || stdout.contains("Commands:"));
+        assert!(out.stderr.is_empty(), "help wrote stderr: {args:?}");
     }
 }
 

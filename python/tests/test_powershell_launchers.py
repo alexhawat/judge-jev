@@ -75,9 +75,15 @@ def test_powershell_selection_exit_passthrough_and_setup_rollback(tmp_path: Path
     assert result.returncode == 0
     assert Path(env["FAKE_LOG"] + ".runtime").read_text().strip() == "python"
 
-    write_cmd(root / "python/.venv/Scripts/judge-jev.cmd", "python", 3)
-    result = invoke(root / "scripts/judge-jev.ps1", root, env, "run")
-    assert result.returncode == 3
+    env["JUDGE_JEV_RUNTIME"] = "rust"
+    result = invoke(root / "scripts/judge-jev.ps1", root, env, "--verbose", "reply")
+    assert result.returncode == 0
+    assert Path(env["FAKE_LOG"] + ".runtime").read_text().strip() == "python"
+
+    for exit_code in (0, 1, 2, 3, 4, 10, 11):
+        write_cmd(root / "python/.venv/Scripts/judge-jev.cmd", "python", exit_code)
+        result = invoke(root / "scripts/judge-jev.ps1", root, env, "run")
+        assert result.returncode == exit_code
 
     write_tool(tools / "uv.cmd", 7)
     failed = invoke(root / "scripts/setup.ps1", root, env)
@@ -89,3 +95,24 @@ def test_powershell_selection_exit_passthrough_and_setup_rollback(tmp_path: Path
     succeeded = invoke(root / "scripts/setup.ps1", root, env)
     assert succeeded.returncode == 0
     assert runtime.read_text().strip() == "python"
+
+    env["JUDGE_JEV_RUNTIME"] = "invalid"
+    invalid = invoke(root / "scripts/setup.ps1", root, env)
+    assert invalid.returncode == 11
+
+    shutil.rmtree(root / ".judge-jev")
+    (root / ".judge-jev").write_text("blocks directory creation", encoding="utf-8")
+    env["JUDGE_JEV_RUNTIME"] = "python"
+    config_failure = invoke(root / "scripts/setup.ps1", root, env)
+    assert config_failure.returncode == 10
+
+    # A path that exists but cannot be launched is a controlled operational
+    # failure rather than PowerShell's ambient exit 1.
+    broken_root, broken_tools = windows_root(tmp_path / "broken")
+    executable = broken_root / "python/.venv/Scripts/judge-jev.cmd"
+    executable.unlink()
+    executable.mkdir()
+    broken_env = os.environ.copy()
+    broken_env["JUDGE_JEV_RUNTIME"] = "python"
+    broken_env["PATH"] = f"{broken_tools}{os.pathsep}{broken_env['PATH']}"
+    assert invoke(broken_root / "scripts/judge-jev.ps1", broken_root, broken_env, "run").returncode == 10

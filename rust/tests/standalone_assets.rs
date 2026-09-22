@@ -66,3 +66,21 @@ fn explicit_invalid_root_does_not_silently_use_embedded_policy() {
     assert!(stderr.contains(&missing.display().to_string()), "{stderr}");
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn packaged_asset_copies_match_the_shared_sources() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    for name in ["assistant-reply.yaml", "agent-trajectory.yaml"] {
+        let shared = fs::read_to_string(root.join("shared/rubrics").join(name)).unwrap();
+        let bundled = judge_jev::embedded_assets::rubric(name.trim_end_matches(".yaml")).unwrap();
+        assert_eq!(bundled, shared, "bundled rubric drifted: {name}");
+    }
+    for name in ["judgment-result.schema.json", "rubric.schema.json"] {
+        let shared = fs::read_to_string(root.join("shared/schemas").join(name)).unwrap();
+        let bundled = judge_jev::embedded_assets::schema(name).unwrap();
+        assert_eq!(bundled, shared, "bundled schema drifted: {name}");
+    }
+}

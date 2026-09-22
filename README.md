@@ -2,28 +2,52 @@
 
 
 
-Jev-native judge kit for LLM outputs (assistant replies, agent trajectories). Dual production runtimes share rubrics, schemas, and CLI behavior.
+Judge Jev evaluates assistant replies and agent trajectories against versioned,
+inspectable rubrics, then returns pass, fail, review, escalate, or skip. It offers a
+readable Python frontend and matching Python/Rust machine engines.
 
-## Agent-first setup
+## Try it offline
 
-**Coding agents: read [AGENTS.md](AGENTS.md) and [llms.txt](llms.txt) before changing or running anything.**
-
-Quick start:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run this
+copy-safe setup. Installation downloads dependencies; the canned judging demo
+makes no model call and needs no API key.
 
 ```bash
-git clone git@github.com:alexhawat/judge-jev.git
+git clone https://github.com/alexhawat/judge-jev.git
 cd judge-jev
-bash scripts/setup.sh                    # picks python or rust → .judge-jev/runtime
+JUDGE_JEV_RUNTIME=python bash scripts/setup.sh
+./scripts/judge-jev
+```
+
+The last command opens an interactive menu; select a canned demo to stay offline.
+You can also run the demo directly:
+
+```bash
 ./scripts/judge-jev reply --prompt 'What is 2+2?' --reply '4' --mock
 # Output begins: DEMO — CANNED ANSWERS — PASS
-export TYPESAFE_API_KEY=...              # only when you are ready for a live call
-./scripts/judge-jev reply --prompt 'What is 2+2?' --reply '4'
 bash examples/run-all.sh                 # six end-to-end examples, mocked and offline
+```
+
+Mock answers are canned. The demo proves installation and routing mechanics, not
+that the reply is safe or correct.
+
+## Run a live judgment
+
+Set the API key only when you intend to make a real, potentially billed call:
+
+```bash
+export TYPESAFE_API_KEY=...
+./scripts/judge-jev reply --prompt 'What is 2+2?' --reply '4'
 ```
 
 On Windows, use `pwsh scripts/setup.ps1` and `pwsh scripts/judge-jev.ps1` in place
 of the bash scripts above — same runtime selection, same argument contract, same
 exit codes.
+
+## Agent and contributor setup
+
+Coding agents and contributors should read [AGENTS.md](AGENTS.md) and
+[llms.txt](llms.txt) before changing or automating the project.
 
 ## CLI
 

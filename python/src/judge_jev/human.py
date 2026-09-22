@@ -110,6 +110,10 @@ def explain_result(saved: dict[str, Any], rubric: Rubric) -> dict[str, Any]:
         "gates": [gate.to_dict() for gate in rerouted.gates],
         "rubric_hash": current_hash,
         "saved_rubric_hash": saved_hash,
+        "source_rubric_version": saved.get("source_rubric_version", saved.get("rubric_version")),
+        "source_rubric_hash": saved.get("source_rubric_hash", saved_hash),
+        "model": saved.get("model"),
+        "runtime": saved.get("runtime"),
         "limitations": limitations,
     }
 
@@ -119,6 +123,11 @@ def format_explanation(explanation: dict[str, Any]) -> str:
         f"Decision: {str(explanation['current_verdict']).upper()}",
         f"Matched rule: {explanation.get('matched_rule_id') or '-'}",
         f"Confidence: {explanation['confidence']:.2f} (floor {explanation['confidence_floor']:.2f})",
+        f"Reason: {explanation['routing_reason']}",
+        f"Model: {explanation.get('model') or '-'}",
+        f"Source rubric: {explanation.get('source_rubric_version') or '-'} / {explanation.get('source_rubric_hash') or '-'}",
+        f"Current rubric hash: {explanation['rubric_hash']}",
+        f"Runtime: {explanation.get('runtime') or '-'}",
     ]
     if explanation.get("deterministic_override"):
         lines.append(
@@ -128,11 +137,21 @@ def format_explanation(explanation: dict[str, Any]) -> str:
     for rule in explanation["rules"]:
         lines.append(f"{rule['rule_id']} {rule['verdict']}: {rule['outcome']}")
         for comparison in rule["comparisons"]:
-            status = "unevaluated" if not comparison["evaluated"] else str(comparison["matched"]).lower()
-            lines.append(
-                f"  {comparison['answer']}.{comparison['field']} {comparison['op']} "
-                f"{comparison['expected']!r}: {status}"
-            )
+            if comparison["evaluated"]:
+                lines.append(
+                    f"  {comparison['answer']}.{comparison['field']} actual "
+                    f"{comparison['actual']!r} {comparison['op']} {comparison['expected']!r}: "
+                    f"{str(comparison['matched']).lower()}"
+                )
+            else:
+                lines.append(
+                    f"  {comparison['answer']}.{comparison['field']} {comparison['op']} "
+                    f"{comparison['expected']!r}: unevaluated"
+                )
+    lines.append("")
+    for gate in explanation["gates"]:
+        provenance = " (historical)" if "historical evidence" in gate["reason"] else ""
+        lines.append(f"Gate {gate['gate_id']}: {gate['outcome']}{provenance} — {gate['reason']}")
     for limitation in explanation["limitations"]:
         lines.append(f"Limitation: {limitation}")
     return "\n".join(lines)

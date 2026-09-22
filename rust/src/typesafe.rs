@@ -230,7 +230,8 @@ pub mod mock {
         let has_reply = state
             .value
             .get("reply")
-            .map(|v| !v.is_null())
+            .and_then(|v| v.as_str())
+            .map(|v| !v.is_empty())
             .unwrap_or(false);
         let has_trajectory = state
             .value

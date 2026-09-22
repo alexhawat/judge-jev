@@ -11,6 +11,7 @@ from typing import NoReturn
 
 from loguru import logger
 
+from judge_jev.canonical import strict_json_loads
 from judge_jev.funnel import read_input_text, replay_judgment, run_judgment
 from judge_jev.guided import (
     GuidedUsageError,
@@ -93,8 +94,8 @@ def cmd_replay(args: argparse.Namespace) -> int:
     path = Path(args.input)
     text = read_input_text(path)
     try:
-        saved = json.loads(text)
-    except json.JSONDecodeError as err:
+        saved = strict_json_loads(text)
+    except (json.JSONDecodeError, ValueError) as err:
         raise JudgeJevError(f"input {path} is not valid JSON: {err}") from err
     result = replay_judgment(saved, allow_version_drift=args.allow_version_drift)
     emit_result(result.to_dict(), args.format, args.save, action="replay")
@@ -252,7 +253,16 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_p = sub.add_parser("doctor", help="check runtime, rubrics, integrations, and an offline smoke test")
     _format_arg(doctor_p, default="human")
 
-    run_p = sub.add_parser("run", help="Run judgment funnel")
+    run_p = sub.add_parser(
+        "run",
+        help="run the machine judgment funnel",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Input: one JSON object matching the rubric state_filter; use - for stdin.\n"
+            "Example: judge-jev run --rubric assistant-reply --input reply.json --mock\n"
+            "Default output is one JSON value. Exits: 0-4 verdict, 10 error, 11 usage."
+        ),
+    )
     run_p.add_argument("--rubric", required=True)
     run_p.add_argument("--input", required=True)
     run_p.add_argument("--mock", action="store_true")
@@ -269,7 +279,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tracing sink (default: logfire when --tracing is set)",
     )
 
-    replay_p = sub.add_parser("replay", help="Re-route from saved JudgmentResult JSON")
+    replay_p = sub.add_parser(
+        "replay",
+        help="re-route from saved JudgmentResult JSON",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Input: a prior JudgmentResult object; no API call is made.\n"
+            "Example: judge-jev replay --input saved.json --format human\n"
+            "Same-version content drift is blocked unless explicitly allowed."
+        ),
+    )
     replay_p.add_argument("--input", required=True)
     replay_p.add_argument(
         "--allow-version-drift",
@@ -279,7 +298,16 @@ def build_parser() -> argparse.ArgumentParser:
     _format_arg(replay_p, default="json")
     _save_arg(replay_p)
 
-    reply_p = sub.add_parser("reply", help="judge an assistant reply")
+    reply_p = sub.add_parser(
+        "reply",
+        help="judge an assistant reply",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Shape: prompt and reply are required strings; context is optional.\n"
+            "Example: judge-jev reply --prompt 'Question' --reply 'Answer' --mock\n"
+            "With no text flags in a terminal, finish each multiline field with .done."
+        ),
+    )
     reply_prompt = reply_p.add_mutually_exclusive_group()
     reply_prompt.add_argument("--prompt")
     reply_prompt.add_argument("--prompt-file")
@@ -298,7 +326,15 @@ def build_parser() -> argparse.ArgumentParser:
     _format_arg(reply_p, default="human")
     _save_arg(reply_p)
 
-    trajectory_p = sub.add_parser("trajectory", help="judge an agent trajectory JSON document")
+    trajectory_p = sub.add_parser(
+        "trajectory",
+        help="judge an agent trajectory JSON document",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Shape: {\"goal\": string, \"steps\": array, \"final_output\": string}.\n"
+            "Example: judge-jev trajectory --input trajectory.json --mock"
+        ),
+    )
     trajectory_p.add_argument("--input", help="JSON file or - for stdin")
     trajectory_p.add_argument("--mock", action="store_true", help="use deterministic canned answers; no API call")
     _format_arg(trajectory_p, default="human")

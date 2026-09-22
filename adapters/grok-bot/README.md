@@ -1,6 +1,7 @@
-# Grok Bot adapter
+# Grok Bot adapter (manual / experimental)
 
-Grok Bot integrations should call the repo CLI rather than embedding Jev prompts.
+This is an unverified manual pattern, not a supported host contract. Grok Bot
+integrations can call the repo CLI rather than embedding Jev prompts.
 
 ## Gate the webhook on the verdict
 

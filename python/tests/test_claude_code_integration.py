@@ -27,12 +27,23 @@ def event(transcript: Path, **overrides: object) -> dict[str, object]:
 
 
 def fake_judge(tmp_path: Path, code: int, verdict: str = "pass") -> Path:
+    result = {
+        "rubric_id": "agent-trajectory", "rubric_version": "3.0.0",
+        "rubric_hash": "sha256:" + "a" * 64,
+        "source_rubric_version": "3.0.0", "source_rubric_hash": "sha256:" + "a" * 64,
+        "verdict": verdict, "confidence": 0.8, "stage": "route", "model": "jev-1.13.0",
+        "usage": {"input_tokens": 1, "output_tokens": 1}, "answers": {},
+        "routing_reason": "fixture reason", "mock": True, "deciding_answers": [],
+        "confidence_floor": 0.7, "runtime": {"name": "python", "version": "0.1.0"},
+        "state_projection": {"paths": [], "hash": "sha256:x", "projected_keys": []},
+        "deterministic_gates": [],
+    }
     script = tmp_path / f"fake-judge-{code}"
     script.write_text(
-        "#!/bin/sh\n"
-        "cat >/dev/null\n"
-        f"printf '%s\\n' '{{\"verdict\":\"{verdict}\",\"routing_reason\":\"fixture reason\"}}'\n"
-        f"exit {code}\n"
+        f"#!{sys.executable}\n"
+        "import json, sys\nsys.stdin.read()\n"
+        f"print(json.dumps({result!r}))\n"
+        f"raise SystemExit({code})\n"
     )
     script.chmod(0o755)
     return script
@@ -87,7 +98,7 @@ def test_failure_policy_is_explicit() -> None:
 
 @pytest.mark.parametrize(
     ("code", "stdout"),
-    [(0, ""), (0, "not-json"), (0, '{"verdict":"fail"}'), (1, '{"verdict":"pass"}')],
+    [(0, ""), (0, "not-json"), (0, '{"verdict":"pass"}'), (0, '{"verdict":"fail"}'), (1, '{"verdict":"pass"}')],
 )
 def test_malformed_or_mismatched_judge_output_obeys_failure_policy(tmp_path: Path, code: int, stdout: str) -> None:
     judge = fake_raw_judge(tmp_path, code, stdout)

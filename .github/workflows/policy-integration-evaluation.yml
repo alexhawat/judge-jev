@@ -53,4 +53,4 @@ jobs:
         run: cd python; uv sync --locked --dev
       - name: PowerShell launcher and atomic setup behavior
         shell: pwsh
-        run: cd python; uv run pytest -q tests/test_powershell_launchers.py
+        run: cd python; uv run pytest -q tests/test_powershell_launchers.py tests/test_guided_cli.py

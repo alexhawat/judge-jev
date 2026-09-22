@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,12 @@ from typing import Any
 OWNER = "judge-jev/claude-stop/v1"
 SESSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
 VERDICT_CODES = {0: "pass", 1: "fail", 2: "review", 3: "escalate", 4: "skip"}
+REQUIRED_RESULT_FIELDS = {
+    "rubric_id", "rubric_version", "rubric_hash", "source_rubric_version",
+    "source_rubric_hash", "verdict", "confidence", "stage", "model", "usage",
+    "answers", "routing_reason", "mock", "deciding_answers", "confidence_floor",
+    "runtime", "state_projection", "deterministic_gates",
+}
 
 
 class HookError(RuntimeError):
@@ -147,11 +154,43 @@ def run_judge(judge: Path, normalized: dict[str, Any], *, mock: bool = False) ->
     return completed.returncode, result, completed.stderr.strip()
 
 
+def _valid_result(result: Any, expected_verdict: str | None) -> bool:
+    if not isinstance(result, dict) or expected_verdict is None:
+        return False
+    if not REQUIRED_RESULT_FIELDS.issubset(result) or result.get("verdict") != expected_verdict:
+        return False
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(result.get("rubric_hash", ""))):
+        return False
+    for field in ("confidence", "confidence_floor"):
+        value = result.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
+            return False
+    if not isinstance(result.get("mock"), bool):
+        return False
+    if not isinstance(result.get("usage"), dict) or not isinstance(result.get("answers"), dict):
+        return False
+    if not isinstance(result.get("deciding_answers"), list) or not isinstance(result.get("deterministic_gates"), list):
+        return False
+    runtime = result.get("runtime")
+    projection = result.get("state_projection")
+    if not isinstance(runtime, dict) or not isinstance(runtime.get("name"), str) or not isinstance(runtime.get("version"), str):
+        return False
+    if not isinstance(projection, dict) or not isinstance(projection.get("paths"), list) or not isinstance(projection.get("projected_keys"), list) or not isinstance(projection.get("hash"), str):
+        return False
+    return all(
+        isinstance(gate, dict)
+        and isinstance(gate.get("gate_id"), str)
+        and gate.get("outcome") in {"pass", "fail", "skip"}
+        and isinstance(gate.get("reason"), str)
+        for gate in result["deterministic_gates"]
+    )
+
+
 def host_response(code: int, result: dict[str, Any] | None, *, stop_hook_active: bool, failure_policy: str) -> dict[str, Any]:
     if stop_hook_active:
         return {}
     expected = VERDICT_CODES.get(code)
-    valid_verdict = isinstance(result, dict) and result.get("verdict") == expected
+    valid_verdict = _valid_result(result, expected)
     if valid_verdict and code in (0, 4):
         return {}
     if valid_verdict and code in (1, 2, 3):
@@ -303,8 +342,11 @@ def main(argv: list[str] | None = None) -> int:
                 event["transcript_path"] = str((Path(args.event).resolve().parent / "transcript-stop.jsonl"))
             normalized = normalize_event(event)
             code, result, stderr = run_judge(Path(args.judge), normalized, mock=True)
-            print(json.dumps({"normalized": normalized, "judge_exit": code, "result": result, "stderr": stderr}, ensure_ascii=False))
-            return 0 if code in VERDICT_CODES and result is not None else 1
+            response = host_response(
+                code, result, stop_hook_active=False, failure_policy="closed"
+            )
+            print(json.dumps({"normalized": normalized, "judge_exit": code, "result": result, "host_response": response, "stderr": stderr}, ensure_ascii=False))
+            return 0 if _valid_result(result, VERDICT_CODES.get(code)) else 1
         event = json.load(sys.stdin)
         response, _ = handle(event, Path(args.judge), mock=args.mock, failure_policy=args.failure_policy)
         print(json.dumps(response, ensure_ascii=False))

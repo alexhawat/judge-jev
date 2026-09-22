@@ -11,7 +11,7 @@ from loguru import logger
 
 from judge_jev.answers import validate_answers
 from judge_jev.budget import check_budget
-from judge_jev.canonical import CanonicalState
+from judge_jev.canonical import CanonicalState, strict_json_loads
 from judge_jev.gates import (
     GateContext,
     build_state_projection,
@@ -79,12 +79,41 @@ def read_input_text(path: Path) -> str:
 def load_input(path: Path) -> dict[str, Any]:
     text = read_input_text(path)
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError as err:
+        data = strict_json_loads(text)
+    except (json.JSONDecodeError, ValueError) as err:
         raise JudgeJevError(f"input {path} is not valid JSON: {err}") from err
     if not isinstance(data, dict):
         raise JudgeJevError(f"input {path} must be a JSON object, got {type(data).__name__}")
     return data
+
+
+def validate_shipped_input_shape(rubric_id: str, raw: dict[str, Any]) -> None:
+    """Reject present values the shipped rubric cannot interpret consistently."""
+    if rubric_id == "assistant-reply":
+        expected: dict[str, type] = {"prompt": str, "reply": str}
+    elif rubric_id == "agent-trajectory":
+        expected = {"goal": str, "steps": list, "final_output": str}
+    else:
+        return
+    for name, kind in expected.items():
+        value = raw.get(name)
+        if value is not None and not isinstance(value, kind):
+            if isinstance(value, bool):
+                actual = "boolean"
+            elif isinstance(value, dict):
+                actual = "object"
+            elif isinstance(value, list):
+                actual = "array"
+            elif isinstance(value, str):
+                actual = "string"
+            elif isinstance(value, (int, float)):
+                actual = "number"
+            else:
+                actual = type(value).__name__
+            wanted = "array" if kind is list else "string"
+            raise JudgeJevError(
+                f"input field '{name}' must be a {wanted} or null, got {actual}"
+            )
 
 
 def run_judgment(
@@ -96,6 +125,7 @@ def run_judgment(
 ) -> JudgmentResult:
     rubric = load_rubric(rubric_id)
     raw = load_input(input_path)
+    validate_shipped_input_shape(rubric.id, raw)
     # Canonical from here on: every request is built from these exact bytes, and
     # both runtimes build the same ones.
     try:

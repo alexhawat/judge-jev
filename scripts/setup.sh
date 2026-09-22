@@ -10,7 +10,8 @@ if [[ -z "$RUNTIME" && -t 0 ]]; then
   echo "Select judge-jev runtime:"
   echo "  1) python"
   echo "  2) rust"
-  read -r -p "Enter 1 or 2 [1]: " choice
+  choice=""
+  read -r -p "Enter 1 or 2 [1]: " choice || true
   case "${choice:-1}" in 1) RUNTIME=python ;; 2) RUNTIME=rust ;; *) echo "Choose 1 or 2." >&2; exit 11 ;; esac
 elif [[ -z "$RUNTIME" ]]; then
   RUNTIME=python
@@ -49,7 +50,7 @@ case "$RUNTIME" in
     ;;
 esac
 
-mkdir -p "$ROOT/.judge-jev"
+mkdir -p "$ROOT/.judge-jev" || exit 10
 tmp="$(mktemp "$ROOT/.judge-jev/runtime.tmp.XXXXXX")" || exit 10
 trap 'rm -f "$tmp"' EXIT
 printf '%s\n' "$RUNTIME" > "$tmp" || exit 10

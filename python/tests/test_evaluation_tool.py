@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import copy
 import json
 import sys
 from pathlib import Path
+
+from judge_jev.funnel import run_judgment
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +16,19 @@ assert SPEC and SPEC.loader
 evaluation = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = evaluation
 SPEC.loader.exec_module(evaluation)
+
+
+def valid_reply_result(verdict: str, confidence: float | None = None) -> dict:
+    saved = evaluation.read_jsonl(
+        ROOT / "evaluation" / "fixtures" / "smoke-saved-results.jsonl"
+    )[0]["result"]
+    result = copy.deepcopy(saved)
+    result["verdict"] = verdict
+    result["confidence"] = confidence
+    result["mock"] = False
+    result.pop("rubric_hash", None)
+    result.pop("routing_trace", None)
+    return result
 
 
 def test_saved_smoke_fixture_reports_full_agreement_without_quality_claim() -> None:
@@ -29,6 +45,9 @@ def test_saved_smoke_fixture_reports_full_agreement_without_quality_claim() -> N
     assert report["score_fit"]["nearest_level_fit"] == 1.0
     assert report["score_fit"]["fit"] == 1.0 - report["score_fit"]["normalized_mae"]
     assert report["usage"]["assistant-reply"]["calls"] == 4
+    assert report["distribution"]["rule_fires"]
+    assert report["distribution"]["unknown_rule_identity"] == 0
+    assert report["distribution"]["rule_margin_mean"] is not None
     assert report["provenance_modes"] == {"mock_pipeline": 8}
     assert any("not real-world judge accuracy" in item for item in report["limitations"])
     assert report["per_split"]["frozen-redteam"]["labeled"] == 2
@@ -42,9 +61,9 @@ def test_known_confusion_matrix_and_expensive_false_pass_are_separate() -> None:
         {"id": "c", "rubric_id": "assistant-reply", "split": "heldout", "expected_verdict": "review", "input": {}},
     ])
     rows = evaluation.index_results([
-        {"case_id": "a", "result": {"verdict": "pass", "confidence": 0.9, "answers": {}, "usage": {}, "mock": False}},
-        {"case_id": "b", "result": {"verdict": "pass", "confidence": 0.8, "answers": {}, "usage": {}, "mock": False}},
-        {"case_id": "c", "result": {"verdict": "review", "confidence": 0.4, "answers": {}, "usage": {}, "mock": False}},
+        {"case_id": "a", "result": valid_reply_result("pass", 0.9)},
+        {"case_id": "b", "result": valid_reply_result("pass", 0.8)},
+        {"case_id": "c", "result": valid_reply_result("review", 0.4)},
     ])
     report = evaluation.evaluate(cases, rows)
     assert report["confusion_matrix"]["fail"]["pass"] == 1
@@ -72,11 +91,41 @@ def test_redteam_fail_to_review_is_also_a_regression() -> None:
         {"id": "red", "rubric_id": "assistant-reply", "split": "frozen-redteam", "expected_verdict": "fail", "input": {}},
     ])
     rows = evaluation.index_results([
-        {"case_id": "red", "result": {"verdict": "review", "answers": {}, "usage": {}, "mock": False}},
+        {"case_id": "red", "result": valid_reply_result("review")},
     ])
     gate = evaluation.evaluate(cases, rows)["redteam_regression"]
     assert gate["status"] == "failed"
     assert gate["regressions"] == [{"case_id": "red", "baseline": "fail", "predicted": "review"}]
+
+
+def test_fresh_result_derives_trace_only_from_matching_complete_rubric() -> None:
+    result = run_judgment(
+        "assistant-reply", ROOT / "fixtures" / "assistant-reply-pass.json", mock=True
+    ).to_dict()
+    assert "routing_trace" not in result
+    case = {
+        "id": "fresh",
+        "rubric_id": "assistant-reply",
+        "split": "heldout",
+        "expected_verdict": result["verdict"],
+        "input": {},
+    }
+    report = evaluation.evaluate(
+        evaluation.validate_cases([case]),
+        evaluation.index_results([{"case_id": "fresh", "result": result}]),
+    )
+    assert report["distribution"]["unknown_rule_identity"] == 0
+    assert report["distribution"]["rule_fires"]
+    assert report["distribution"]["rule_margin_mean"] is not None
+
+    mismatched = copy.deepcopy(result)
+    mismatched["rubric_hash"] = "sha256:" + "0" * 64
+    report = evaluation.evaluate(
+        evaluation.validate_cases([case]),
+        evaluation.index_results([{"case_id": "fresh", "result": mismatched}]),
+    )
+    assert report["distribution"]["unknown_rule_identity"] == 1
+    assert report["distribution"]["rule_fires"] == {}
 
 
 def test_invalid_redteam_result_cannot_satisfy_gate() -> None:
@@ -226,11 +275,36 @@ def test_case_and_result_numeric_validation_rejects_nonfinite_or_wrong_score_lab
         raise AssertionError("non-finite latency accepted")
 
 
+def test_jsonl_rejects_overflowing_float_literal(tmp_path: Path) -> None:
+    path = tmp_path / "overflow.jsonl"
+    path.write_text('{"case_id":"a","latency_ms":1e999,"result":{}}\n')
+    try:
+        evaluation.read_jsonl(path)
+    except evaluation.EvaluationError as err:
+        assert "non-finite" in str(err)
+    else:
+        raise AssertionError("overflowing float literal accepted")
+
+
 def test_nearest_level_score_fit_uses_fractional_values() -> None:
     assert evaluation._round_level(2.49, 4) == 2
     assert evaluation._round_level(2.5, 4) == 3
     assert evaluation._round_level(-0.4, 4) == 0
     assert evaluation._round_level(9.0, 4) == 4
+
+
+def test_saved_result_must_match_case_rubric_and_answer_contract() -> None:
+    case = {
+        "id": "a",
+        "rubric_id": "assistant-reply",
+        "split": "heldout",
+        "expected_verdict": "pass",
+        "input": {},
+    }
+    wrong = {"result": {"rubric_id": "agent-trajectory", "verdict": "pass", "answers": {}, "usage": {}}}
+    assert "does not match" in evaluation._validate_result_for_case(case, wrong)
+    malformed = {"result": {"rubric_id": "assistant-reply", "verdict": "pass", "answers": {}, "usage": {}}}
+    assert "invalid answers" in evaluation._validate_result_for_case(case, malformed)
 
 
 def test_run_cases_rejects_exit_verdict_mismatch_and_malformed_json(monkeypatch, tmp_path: Path) -> None:

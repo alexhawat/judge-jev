@@ -14,8 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from judge_jev.budget import check_budget
-from judge_jev.canonical import CanonicalState
-from judge_jev.funnel import load_input, read_input_text, replay_judgment, run_judgment
+from judge_jev.canonical import CanonicalState, strict_json_loads
+from judge_jev.funnel import (
+    load_input,
+    read_input_text,
+    replay_judgment,
+    run_judgment,
+    validate_shipped_input_shape,
+)
 from judge_jev.history import delete_all, delete_entry, history_dir, list_entries, load_entry, save_result
 from judge_jev.human import explain_result, format_explanation, format_result
 from judge_jev.models import JudgeJevError
@@ -58,12 +64,33 @@ def _multiline(label: str) -> str:
     while True:
         try:
             line = input()
-        except EOFError:
+        except (EOFError, KeyboardInterrupt):
             break
         if line == ".done":
             break
         lines.append(line)
     return "\n".join(lines)
+
+
+def _split_editor_command(command: str) -> list[str]:
+    """Split EDITOR with the platform's command-line quoting rules."""
+    if os.name != "nt":
+        return shlex.split(command)
+    # Windows does not use POSIX backslash escaping. CommandLineToArgvW is the
+    # native inverse of subprocess.list2cmdline and handles quoted paths.
+    import ctypes  # noqa: PLC0415 - unavailable API is isolated to Windows.
+
+    count = ctypes.c_int()
+    parser = ctypes.windll.shell32.CommandLineToArgvW
+    parser.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+    parser.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    argv_ptr = parser(command, ctypes.byref(count))
+    if not argv_ptr:
+        raise ValueError("Windows could not parse the editor command")
+    try:
+        return [argv_ptr[index] for index in range(count.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.cast(argv_ptr, ctypes.c_void_p))
 
 
 def _edit_reply() -> tuple[Any, Any, Any]:
@@ -77,20 +104,38 @@ def _edit_reply() -> tuple[Any, Any, Any]:
             json.dump({"prompt": "", "reply": "", "context": ""}, stream, indent=2)
             stream.write("\n")
         try:
-            argv = [*shlex.split(editor), str(path)]
+            argv = [*_split_editor_command(editor), str(path)]
         except ValueError as err:
             raise GuidedUsageError(f"invalid editor command: {err}") from err
         if not argv:
             raise GuidedUsageError("VISUAL or EDITOR is empty")
         try:
-            completed = subprocess.run(argv, check=False)  # noqa: S603 - direct argv; no shell.
+            # Editor diagnostics must not corrupt JSON mode's one-value stdout.
+            # In a real terminal, send stdout to that terminal's stderr so a
+            # full-screen editor keeps terminal control. Test/captured streams do
+            # not expose a file descriptor, so capture and forward in that case.
+            try:
+                sys.stderr.fileno()
+                editor_stdout: Any = sys.stderr
+            except (AttributeError, OSError):
+                editor_stdout = subprocess.PIPE
+            completed = subprocess.run(  # noqa: S603 - direct argv; no shell.
+                argv, check=False, stdout=editor_stdout, text=True
+            )
+        except KeyboardInterrupt as err:
+            raise GuidedUsageError("editor cancelled") from err
         except OSError as err:
             raise JudgeJevError(f"cannot start editor {argv[0]!r}: {err}") from err
+        if isinstance(completed.stdout, str) and completed.stdout:
+            # Keep an editor's status text visible without adding bytes before a
+            # JSON result on stdout. Interactive editors continue to use the
+            # controlling terminal through stdin/stderr.
+            print(completed.stdout, file=sys.stderr, end="")
         if completed.returncode != 0:
             raise JudgeJevError(f"editor exited {completed.returncode}")
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as err:
+            payload = strict_json_loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError) as err:
             raise GuidedUsageError(f"editor reply document is not valid JSON: {err}") from err
         if not isinstance(payload, dict):
             raise GuidedUsageError("editor reply document must be a JSON object")
@@ -144,7 +189,7 @@ def cmd_trajectory(args: Any) -> int:
     if input_path is None and sys.stdin.isatty() and args.format == "human":
         try:
             input_path = input("Trajectory JSON file (use `judge-jev input template --rubric agent-trajectory` to create one): ").strip()
-        except EOFError:
+        except (EOFError, KeyboardInterrupt):
             input_path = ""
     if not input_path:
         raise GuidedUsageError("trajectory needs --input <file.json|->")
@@ -182,6 +227,21 @@ def cmd_input(args: Any) -> int:
         return 0
     raw = load_input(Path(args.input))
     rubric = load_rubric(args.rubric)
+    validate_shipped_input_shape(rubric.id, raw)
+    if rubric.id == "assistant-reply":
+        for field in ("prompt", "reply"):
+            if not isinstance(raw.get(field), str) or not raw[field].strip():
+                raise GuidedUsageError(
+                    f"assistant-reply input needs a non-empty {field}"
+                )
+    elif rubric.id == "agent-trajectory":
+        for field in ("goal", "final_output"):
+            if not isinstance(raw.get(field), str) or not raw[field].strip():
+                raise GuidedUsageError(
+                    f"agent-trajectory input needs a non-empty {field}"
+                )
+        if not isinstance(raw.get("steps"), list):
+            raise GuidedUsageError("agent-trajectory input needs a steps array")
     filtered = filter_state(raw, rubric.state_filter)
     state = CanonicalState.of(filtered)
     check_budget(state, rubric)
@@ -212,19 +272,39 @@ def _runtime_status() -> tuple[str, str]:
 def doctor_report() -> dict[str, Any]:
     runtime, why = _runtime_status()
     smoke_error = None
-    try:
-        smoke = _run_object(
-            "assistant-reply",
-            {"prompt": "Say hello.", "reply": "Hello.", "context": "Offline setup smoke."},
-            mock=True,
-        )
-        smoke_verdict = smoke["verdict"]
-    except Exception as err:  # noqa: BLE001 - doctor reports, it does not hide the failure.
-        smoke_verdict = None
-        smoke_error = f"{type(err).__name__}: {err}"
     root = repo_root()
     checkout = (root / "scripts" / "setup.sh").is_file()
     claude_fixture = root / "hooks" / "claude-code" / "fixtures" / "stop-event.json"
+    integration: dict[str, Any] | None = None
+    try:
+        if checkout and claude_fixture.is_file():
+            environment = os.environ.copy()
+            environment["JUDGE_JEV_RUNTIME"] = runtime
+            environment.setdefault(
+                "UV_CACHE_DIR", str(Path(tempfile.gettempdir()) / "judge-jev-uv-cache")
+            )
+            completed = subprocess.run(  # noqa: S603 - fixed repository scripts.
+                [sys.executable, str(root / "hooks/claude-code/claude_code_hook.py"), "doctor", "--event", str(claude_fixture), "--judge", str(root / "scripts/judge-jev")],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+                env=environment,
+            )
+            integration = strict_json_loads(completed.stdout)
+            if completed.returncode != 0 or not isinstance(integration, dict):
+                raise JudgeJevError(completed.stderr.strip() or "Claude fixture doctor failed")
+            smoke_verdict = integration["result"]["verdict"]
+        else:
+            smoke = _run_object(
+                "assistant-reply",
+                {"prompt": "Say hello.", "reply": "Hello.", "context": "Offline setup smoke."},
+                mock=True,
+            )
+            smoke_verdict = smoke["verdict"]
+    except Exception as err:  # noqa: BLE001 - doctor reports, it does not hide the failure.
+        smoke_verdict = None
+        smoke_error = f"{type(err).__name__}: {err}"
     fixes = []
     if checkout:
         fixes.append("Run scripts/setup.sh (or scripts/setup.ps1) if a selected dependency is missing.")
@@ -247,6 +327,11 @@ def doctor_report() -> dict[str, Any]:
             "network_tested": False,
         },
         "offline_smoke": {"passed": smoke_error is None, "verdict": smoke_verdict, "error": smoke_error},
+        "integration_smoke": {
+            "claude_code_recorded_fixture": integration is not None and smoke_error is None,
+            "selected_runtime_exercised": runtime if integration is not None else "python-in-process",
+            "host_response": integration.get("host_response") if integration else None,
+        },
         "claude_code_fixture": str(claude_fixture) if claude_fixture.is_file() else None,
         "network_used": False,
         "fixes": fixes,
@@ -283,8 +368,8 @@ def _read_saved(args: Any) -> dict[str, Any]:
     if not getattr(args, "input", None):
         raise GuidedUsageError("provide --input <result.json|-> or --history-id <id>")
     try:
-        saved = json.loads(read_input_text(Path(args.input)))
-    except json.JSONDecodeError as err:
+        saved = strict_json_loads(read_input_text(Path(args.input)))
+    except (json.JSONDecodeError, ValueError) as err:
         raise JudgeJevError(f"saved result is not valid JSON: {err}") from err
     if not isinstance(saved, dict):
         raise JudgeJevError("saved result must be a JSON object")

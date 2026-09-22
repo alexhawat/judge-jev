@@ -24,8 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python" / "src"))
 
 from judge_jev.models import GateOutcome, JudgeJevError, Rubric  # noqa: E402
+from judge_jev.answers import validate_answers  # noqa: E402
 from judge_jev.reroute import reroute_with_rubric  # noqa: E402
-from judge_jev.rubric import load_rubric  # noqa: E402
+from judge_jev.rubric import load_rubric, rubric_content_hash  # noqa: E402
 
 VERDICTS = ("pass", "fail", "review", "escalate", "skip")
 SPLITS = ("train", "heldout", "frozen-redteam")
@@ -41,15 +42,27 @@ def _reject_json_constant(value: str) -> None:
     raise EvaluationError(f"non-finite JSON number {value} is not allowed")
 
 
+def _finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise EvaluationError(f"non-finite JSON number {value} is not allowed")
+    return parsed
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows = []
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         try:
-            value = json.loads(line, parse_constant=_reject_json_constant)
-        except json.JSONDecodeError as err:
-            raise EvaluationError(f"{path}:{number}: invalid JSON: {err.msg}") from err
+            value = json.loads(
+                line,
+                parse_constant=_reject_json_constant,
+                parse_float=_finite_json_float,
+            )
+        except (json.JSONDecodeError, EvaluationError) as err:
+            detail = err.msg if isinstance(err, json.JSONDecodeError) else str(err)
+            raise EvaluationError(f"{path}:{number}: invalid JSON: {detail}") from err
         if not isinstance(value, dict):
             raise EvaluationError(f"{path}:{number}: row must be an object")
         rows.append(value)
@@ -62,10 +75,13 @@ def read_dataset_metadata(dataset_path: Path) -> dict[str, Any]:
         return {}
     try:
         value = json.loads(
-            metadata_path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant
+            metadata_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
         )
-    except json.JSONDecodeError as err:
-        raise EvaluationError(f"{metadata_path}: invalid JSON: {err.msg}") from err
+    except (json.JSONDecodeError, EvaluationError) as err:
+        detail = err.msg if isinstance(err, json.JSONDecodeError) else str(err)
+        raise EvaluationError(f"{metadata_path}: invalid JSON: {detail}") from err
     if not isinstance(value, dict):
         raise EvaluationError(f"{metadata_path}: metadata must be an object")
     return value
@@ -218,6 +234,11 @@ def _validate_result_for_case(case: dict[str, Any], row: dict[str, Any]) -> str 
     result = row.get("result")
     if not isinstance(result, dict):
         return str(row.get("error") or "missing result")
+    if result.get("rubric_id") != case["rubric_id"]:
+        return (
+            f"result rubric_id {result.get('rubric_id')!r} does not match "
+            f"case rubric_id {case['rubric_id']!r}"
+        )
     if result.get("verdict") not in VERDICTS:
         return f"invalid verdict {result.get('verdict')!r}"
     confidence = result.get("confidence")
@@ -239,6 +260,10 @@ def _validate_result_for_case(case: dict[str, Any], row: dict[str, Any]) -> str 
     if not isinstance(answers, dict):
         return "answers must be an object"
     rubric = load_rubric(case["rubric_id"])
+    try:
+        validate_answers(rubric, answers)
+    except JudgeJevError as err:
+        return f"invalid answers: {err}"
     for question, answer in answers.items():
         if not isinstance(answer, dict):
             return f"answer {question} must be an object"
@@ -315,7 +340,21 @@ def evaluate(
         if isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and math.isfinite(confidence):
             confidences.append(float(confidence))
         reason = str(result.get("routing_reason") or "unknown")
+        rubric = load_rubric(case["rubric_id"])
         trace = result.get("routing_trace") or {}
+        if (
+            not trace
+            and result.get("rubric_hash") == rubric_content_hash(rubric)
+            and isinstance(result.get("answers"), dict)
+        ):
+            rerouted = reroute_with_rubric(
+                rubric,
+                result["answers"],
+                historical_gates=_historical_gates(result, case_id),
+                reason_prefix="evaluation",
+            )
+            trace = rerouted.routing.trace_dict()
+            trace["minimum_margin"] = _trace_minimum_margin(trace)
         rule_id = trace.get("matched_rule_id") if isinstance(trace, dict) else None
         if isinstance(rule_id, str) and rule_id:
             rule_fires[rule_id] += 1
@@ -323,7 +362,6 @@ def evaluate(
             unknown_rule_identity += 1
         if "Downgraded from" in reason:
             floor_downgrades += 1
-        rubric = load_rubric(case["rubric_id"])
         trace_margin = trace.get("minimum_margin") if isinstance(trace, dict) else None
         if isinstance(trace_margin, (int, float)) and not isinstance(trace_margin, bool) and math.isfinite(trace_margin):
             margins.append(float(trace_margin))

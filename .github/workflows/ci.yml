@@ -159,3 +159,5 @@ jobs:
               jsonschema.validate(yaml.safe_load(path.read_text()), schema)
               print(f"ok {path.name}")
           PY
+      - name: Packaged Rust assets must match shared sources
+        run: bash scripts/check-bundled-assets.sh

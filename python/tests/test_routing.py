@@ -278,6 +278,57 @@ def test_finite_unreachable_comparison_is_valid_policy(tmp_path, monkeypatch):
     assert load_rubric("custom").rules[0].conditions[0].value == 1.1
 
 
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+def test_nonstandard_nonfinite_json_is_rejected_before_filtering(tmp_path, capsys, constant):
+    path = tmp_path / "nonfinite.json"
+    path.write_text(
+        '{"prompt":"p","reply":"r","context":null,"unselected":' + constant + "}",
+        encoding="utf-8",
+    )
+    assert main(["run", "--rubric", "assistant-reply", "--input", str(path), "--mock"]) == 10
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "not valid JSON" in captured.err
+
+
+def test_overflowing_float_is_rejected_in_replay_envelope(tmp_path, capsys):
+    path = tmp_path / "saved.json"
+    path.write_text('{"usage":{"input_tokens":1e999}}', encoding="utf-8")
+    assert main(["replay", "--input", str(path)]) == 10
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "not valid JSON" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("rubric_id", "payload", "field"),
+    [
+        ("assistant-reply", {"prompt": "p", "reply": False}, "reply"),
+        ("assistant-reply", {"prompt": [], "reply": "r"}, "prompt"),
+        (
+            "agent-trajectory",
+            {"goal": "g", "steps": "not a list", "final_output": "done"},
+            "steps",
+        ),
+    ],
+)
+def test_malformed_shipped_input_shape_is_operational_error(
+    tmp_path, capsys, rubric_id, payload, field
+):
+    path = tmp_path / "malformed.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(["run", "--rubric", rubric_id, "--input", str(path), "--mock"]) == 10
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert f"input field '{field}'" in captured.err
+
+
+def test_empty_reply_is_present_but_not_judgeable(tmp_path):
+    path = tmp_path / "empty.json"
+    path.write_text(json.dumps({"prompt": "question", "reply": "", "context": ""}))
+    assert run_judgment("assistant-reply", path, mock=True).verdict == "skip"
+
+
 def test_replay_rejects_same_version_content_drift_and_preserves_source(monkeypatch):
     original = run_judgment("assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True)
     saved = original.to_dict()

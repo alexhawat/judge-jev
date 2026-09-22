@@ -14,8 +14,19 @@ else
 fi
 
 # Human-facing commands live in the recommended Python frontend even when Rust is
-# selected for machine `run`/`replay` calls.
-case "${1:-}" in
+# selected for machine `run`/`replay` calls. Python accepts its global verbosity
+# flags anywhere, so find the command after those flags rather than assuming argv0.
+COMMAND=""
+previous=""
+for arg in "$@"; do
+  if [[ "$previous" == "--format" && "$arg" == "human" ]]; then
+    RUNTIME=python
+  fi
+  previous="$arg"
+  case "$arg" in --verbose|--debug) continue ;; esac
+  [[ -n "$COMMAND" ]] || COMMAND="$arg"
+done
+case "$COMMAND" in
   init|doctor|reply|trajectory|input|explain|history) RUNTIME=python ;;
 esac
 if [[ $# -eq 0 && -t 0 ]]; then
@@ -26,13 +37,13 @@ case "$RUNTIME" in
   python)
     command -v uv >/dev/null || { echo "judge-jev: uv is required; run scripts/setup.sh" >&2; exit 10; }
     PY_BIN="$ROOT/python/.venv/bin/judge-jev"
-    if [[ ! -x "$PY_BIN" ]]; then
-      set +e
-      uv sync --project "$ROOT/python" --locked >&2
-      prep=$?
-      set -e
-      [[ "$prep" == 0 ]] || exit 10
-    fi
+    # Always reconcile the environment with the lock. uv no-ops when it is fresh;
+    # checking only for an old executable leaves stale dependencies after checkout.
+    set +e
+    uv sync --project "$ROOT/python" --locked --extra tracing >&2
+    prep=$?
+    set -e
+    [[ "$prep" == 0 ]] || exit 10
     [[ -x "$PY_BIN" ]] || { echo "judge-jev: Python bootstrap did not install $PY_BIN" >&2; exit 10; }
     exec "$PY_BIN" "$@"
     ;;
