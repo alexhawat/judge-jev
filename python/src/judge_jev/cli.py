@@ -46,7 +46,7 @@ USAGE = """usage: judge-jev <command> ...
   history list | show | replay | delete
   capture prune --dir <capture-dir> --older-than <duration> [--apply]
   tune thresholds --rubric <id> --set <cases.jsonl> --results <results.jsonl>
-  tune instructions --rubric <id> --question <id> --set <cases.jsonl> --budget <calls> [--live]
+  tune instructions --rubric <id> --question <id> --set <cases.jsonl> --budget <calls> [--live --budget-mode calls]
   rubric list | show --id <id>
   --version"""
 
@@ -167,7 +167,9 @@ def cmd_tune(args: argparse.Namespace) -> int:
             args.question,
             Path(args.set),
             live=args.live,
+            budget_mode=args.budget_mode,
             metric_budget=args.budget,
+            reflection_call_budget=args.reflection_call_budget,
             task_token_cap=args.task_token_cap,
             max_tokens_per_call=args.max_tokens_per_call,
             reflection_cost_cap=args.reflection_cost_cap,
@@ -176,6 +178,7 @@ def cmd_tune(args: argparse.Namespace) -> int:
             cache_dir=Path(args.cache) if args.cache else None,
             seed=args.seed,
             minimum_support=args.min_support,
+            max_gate_candidates=args.max_gate_candidates,
         )
     else:
         return EXIT_USAGE
@@ -512,6 +515,8 @@ def build_parser() -> argparse.ArgumentParser:
     instructions_p.add_argument("--set", required=True)
     instructions_p.add_argument("--budget", type=int, required=True)
     instructions_p.add_argument("--live", action="store_true")
+    instructions_p.add_argument("--budget-mode", choices=("calls", "hard-spend"), default=None)
+    instructions_p.add_argument("--reflection-call-budget", type=int, default=0)
     instructions_p.add_argument("--task-token-cap", type=int, default=0)
     instructions_p.add_argument("--max-tokens-per-call", type=int, default=0)
     instructions_p.add_argument("--reflection-cost-cap", type=float, default=0.0)
@@ -520,6 +525,7 @@ def build_parser() -> argparse.ArgumentParser:
     instructions_p.add_argument("--cache", default=None)
     instructions_p.add_argument("--seed", type=int, default=1)
     instructions_p.add_argument("--min-support", type=int, default=2)
+    instructions_p.add_argument("--max-gate-candidates", type=int, default=2)
     instructions_p.add_argument("--output", default=None)
 
     return parser

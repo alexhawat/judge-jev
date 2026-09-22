@@ -12,16 +12,19 @@ import json
 import math
 import random
 import statistics
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 import yaml
 
-from judge_jev.models import Condition, JudgeJevError, RoutingRule, Rubric, VERDICTS
-from judge_jev.paths import repo_root
-from judge_jev.routing import route_verdict
-from judge_jev.rubric import load_rubric
+from judge_jev.evaluation import evaluate as evaluate_labeled
+from judge_jev.evaluation import index_results, validate_cases
+from judge_jev.models import VERDICTS, GateOutcome, JudgeJevError, Rubric
+from judge_jev.paths import rubrics_dir, tuning_dir
+from judge_jev.reroute import reroute_with_rubric
+from judge_jev.rubric import load_rubric, rubric_content_hash
 
 SPLITS = ("train", "heldout", "frozen-redteam")
 
@@ -63,14 +66,36 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def load_cost_policy(path: Path | None = None) -> dict[str, Any]:
-    source = path or repo_root() / "shared" / "tuning" / "cost-policy-v1.yaml"
+    source = path or tuning_dir() / "cost-policy-v1.yaml"
     data = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("costs"), dict):
         raise JudgeJevError("cost policy needs a costs mapping")
+    required = data.get("required_classes")
+    if not isinstance(required, list) or not required or any(item not in VERDICTS for item in required):
+        raise JudgeJevError("cost policy required_classes must be a non-empty list of verdicts")
+    for name, value in data["costs"].items():
+        if name != "default":
+            parts = name.removeprefix("actual_").split("_predicted_")
+            if len(parts) != 2 or any(part not in VERDICTS for part in parts):
+                raise JudgeJevError(f"cost policy has invalid cell {name!r}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise JudgeJevError(f"cost policy {name} must be finite and non-negative")
+    for name in ("review_cost", "token_cost_per_1000"):
+        value = data.get(name, 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise JudgeJevError(f"cost policy {name} must be finite and non-negative")
     return data
 
 
-def join_corpus(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def join_corpus(
+    cases: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    rubric_id: str | None = None,
+    allow_legacy_provenance: bool = False,
+) -> list[dict[str, Any]]:
+    target_rubric = load_rubric(rubric_id) if rubric_id is not None else None
+    target_hash = rubric_content_hash(target_rubric) if target_rubric is not None else None
     indexed: dict[str, dict[str, Any]] = {}
     for row in results:
         case_id = row.get("case_id") or row.get("id")
@@ -87,6 +112,10 @@ def join_corpus(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> l
             raise JudgeJevError("cases need unique string id")
         if split not in SPLITS or expected not in VERDICTS:
             raise JudgeJevError(f"case {case_id!r} has invalid split or expected_verdict")
+        if rubric_id is not None and case.get("rubric_id") != rubric_id:
+            raise JudgeJevError(
+                f"case {case_id!r} targets rubric {case.get('rubric_id')!r}, expected {rubric_id!r}"
+            )
         case_ids.add(case_id)
         result_row = indexed.get(case_id)
         if result_row is None:
@@ -94,7 +123,28 @@ def join_corpus(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> l
         result = result_row.get("result", result_row)
         if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
             raise JudgeJevError(f"case {case_id!r} result has no answers")
-        joined.append({**case, "result": result})
+        if target_rubric is not None:
+            if result.get("rubric_id") != target_rubric.id:
+                raise JudgeJevError(
+                    f"case {case_id!r} result rubric_id {result.get('rubric_id')!r} "
+                    f"does not match {target_rubric.id!r}"
+                )
+            if result.get("rubric_version") != target_rubric.version:
+                raise JudgeJevError(
+                    f"case {case_id!r} result rubric_version {result.get('rubric_version')!r} "
+                    f"does not match {target_rubric.version!r}"
+                )
+            saved_hash = result.get("rubric_hash")
+            if saved_hash is None and not allow_legacy_provenance:
+                raise JudgeJevError(
+                    f"case {case_id!r} result has no rubric_hash; legacy evidence cannot "
+                    "support a real-quality tuning proposal"
+                )
+            if saved_hash is not None and saved_hash != target_hash:
+                raise JudgeJevError(
+                    f"case {case_id!r} result rubric_hash does not match the effective rubric"
+                )
+        joined.append({**case, "result": result, "result_row": result_row})
     extras = set(indexed) - case_ids
     if extras:
         raise JudgeJevError(f"results contain unknown case ids: {sorted(extras)}")
@@ -106,7 +156,12 @@ def validate_support(
     required_classes: Iterable[str],
     minimum: int,
 ) -> dict[str, dict[str, int]]:
-    support = {split: {label: 0 for label in required_classes} for split in SPLITS}
+    labels = list(required_classes)
+    if minimum < 1:
+        raise JudgeJevError("minimum support must be at least 1")
+    if not labels or any(label not in VERDICTS for label in labels):
+        raise JudgeJevError("required classes must be a non-empty list of verdicts")
+    support = {split: {label: 0 for label in labels} for split in SPLITS}
     for row in rows:
         if row["expected_verdict"] in support[row["split"]]:
             support[row["split"]][row["expected_verdict"]] += 1
@@ -172,16 +227,12 @@ def apply_candidate(rubric: Rubric, parameters: list[NumericParameter], values: 
     return replace(rubric, confidence_floors=floors, rules=tuple(rules))
 
 
-def _historical_gate_override(result: dict[str, Any], verdict: str) -> str:
-    for gate in result.get("deterministic_gates") or []:
-        if gate.get("gate_id") == "injection_heuristic" and gate.get("outcome") == "fail":
-            return "escalate"
-    return verdict
-
-
 def default_reroute(rubric: Rubric, result: dict[str, Any]) -> str:
-    verdict = route_verdict(rubric, result["answers"])[0]
-    return _historical_gate_override(result, verdict)
+    gates = [
+        GateOutcome(str(gate["gate_id"]), str(gate["outcome"]), str(gate["reason"]))
+        for gate in result.get("deterministic_gates") or []
+    ]
+    return reroute_with_rubric(rubric, result["answers"], historical_gates=gates).verdict
 
 
 def evaluate_candidate(
@@ -196,6 +247,7 @@ def evaluate_candidate(
     split_reports: dict[str, Any] = {}
     total_cost = 0.0
     total_tokens = 0
+    all_usage_known = True
     predictions: dict[str, str] = {}
     for split in SPLITS:
         subset = [row for row in rows if row["split"] == split]
@@ -207,6 +259,7 @@ def evaluate_candidate(
         pass_predictions = 0
         true_pass = 0
         split_tokens = 0
+        usage_known = True
         for row in subset:
             predicted = reroute(rubric, row["result"])
             actual = row["expected_verdict"]
@@ -223,10 +276,17 @@ def evaluate_candidate(
                 pass_predictions += 1
                 true_pass += int(actual == "pass")
             usage = row["result"].get("usage") or {}
-            split_tokens += int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+            input_tokens = usage.get("input_tokens")
+            output_tokens = usage.get("output_tokens")
+            if type(input_tokens) is not int or type(output_tokens) is not int:
+                usage_known = False
+            else:
+                split_tokens += input_tokens + output_tokens
         count = len(subset)
         total_cost += split_cost
-        total_tokens += split_tokens
+        all_usage_known = all_usage_known and usage_known
+        if usage_known:
+            total_tokens += split_tokens
         split_reports[split] = {
             "count": count,
             "confusion_matrix": matrix,
@@ -237,34 +297,83 @@ def evaluate_candidate(
             "pass_prediction_support": pass_predictions,
             "human_review_volume": review / count if count else None,
             "review_count": review,
-            "tokens": split_tokens,
+            "tokens": split_tokens if usage_known else None,
+            "token_support": count if usage_known else 0,
         }
     train = split_reports["train"]
     train_count = train["count"] or 1
+    token_cost = None
+    if train["tokens"] is not None:
+        token_cost = (
+            float(cost_policy.get("token_cost_per_1000", 0.0))
+            * float(train["tokens"])
+            / (1000 * train_count)
+        )
     objective_cost = (
         float(train["expected_confusion_cost"] or 0.0)
         + float(cost_policy.get("review_cost", 0.0)) * float(train["human_review_volume"] or 0.0)
-        + float(cost_policy.get("token_cost_per_1000", 0.0)) * float(train["tokens"]) / (1000 * train_count)
+        + (token_cost or 0.0)
     )
     return {
         "splits": split_reports,
         "negative_expected_cost_reward": -objective_cost,
         "total_confusion_cost": total_cost,
-        "total_tokens": total_tokens,
+        "token_cost": token_cost,
+        "total_tokens": total_tokens if all_usage_known else None,
+        "usage_complete": all_usage_known,
         "predictions": predictions,
     }
 
 
-def _redteam_non_regression(baseline: dict[str, Any], candidate: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+def canonical_report(
+    rubric: Rubric,
+    rows: list[dict[str, Any]],
+    reroute: Callable[[Rubric, dict[str, Any]], str],
+) -> dict[str, Any]:
+    cases = [
+        {key: value for key, value in row.items() if key not in {"result", "result_row"}}
+        for row in rows
+    ]
+    result_rows = []
     for row in rows:
-        if row["split"] != "frozen-redteam":
-            continue
-        case_id = row["id"]
-        before = baseline["predictions"][case_id]
-        after = candidate["predictions"][case_id]
-        if before != "pass" and after == "pass":
-            return False
-    return True
+        result_row = copy.deepcopy(row["result_row"])
+        result = copy.deepcopy(row["result"])
+        result["source_rubric_version"] = result.get("rubric_version")
+        result["source_rubric_hash"] = result.get("rubric_hash")
+        result["rubric_id"] = rubric.id
+        result["rubric_version"] = rubric.version
+        # A candidate is a distinct effective policy even before its proposed
+        # version is committed. Never carry the source policy's trace forward.
+        result.pop("routing_trace", None)
+        if reroute is default_reroute:
+            historical_gates = [
+                GateOutcome(str(gate["gate_id"]), str(gate["outcome"]), str(gate["reason"]))
+                for gate in result.get("deterministic_gates") or []
+            ]
+            routed = reroute_with_rubric(
+                rubric, result["answers"], historical_gates=historical_gates
+            )
+            result.update(
+                {
+                    "verdict": routed.verdict,
+                    "routing_reason": routed.reason,
+                    "stage": routed.routing.stage,
+                    "deciding_answers": list(routed.routing.deciding_answers),
+                    "confidence": routed.routing.confidence,
+                    "confidence_floor": rubric.confidence_floor,
+                    "deterministic_gates": [gate.to_dict() for gate in routed.gates],
+                    "routing_trace": routed.routing.trace_dict(),
+                    "rubric_hash": rubric_content_hash(rubric),
+                }
+            )
+        else:
+            # Custom rerouters are a test/demo seam and cannot supply a canonical
+            # routing trace. Leaving the hash absent keeps that limitation visible.
+            result["verdict"] = reroute(rubric, row["result"])
+            result.pop("rubric_hash", None)
+        result_row["result"] = result
+        result_rows.append(result_row)
+    return evaluate_labeled(cases, index_results(result_rows))
 
 
 def group_advantages(rewards: list[float]) -> list[float]:
@@ -279,21 +388,26 @@ def group_advantages(rewards: list[float]) -> list[float]:
 
 
 def pareto_front(candidates: list[Candidate]) -> list[Candidate]:
-    def objectives(candidate: Candidate) -> tuple[float, float, float, float]:
+    def objectives(candidate: Candidate) -> tuple[float, float, float, float] | None:
         held = candidate.metrics["splits"]["heldout"]
-        recall = held["safety_recall"] if held["safety_recall"] is not None else 0.0
-        precision = held["pass_precision"] if held["pass_precision"] is not None else 0.0
-        review = held["human_review_volume"] if held["human_review_volume"] is not None else 1.0
-        tokens = float(held["tokens"])
+        recall = held["safety_recall"]
+        precision = held["pass_precision"]
+        review = held["human_review_volume"]
+        tokens = held["tokens"]
+        if recall is None or precision is None or review is None or tokens is None:
+            return None
         return (float(recall), float(precision), -float(review), -tokens)
 
     frontier = []
     eligible = [candidate for candidate in candidates if candidate.redteam_passed]
     for candidate in eligible:
         current = objectives(candidate)
+        if current is None:
+            continue
         dominated = any(
-            all(a >= b for a, b in zip(objectives(other), current))
-            and any(a > b for a, b in zip(objectives(other), current))
+            (other_objectives := objectives(other)) is not None
+            and all(a >= b for a, b in zip(other_objectives, current))
+            and any(a > b for a, b in zip(other_objectives, current))
             for other in eligible
             if other is not candidate
         )
@@ -348,8 +462,21 @@ def threshold_search(
 ) -> dict[str, Any]:
     if not 1 <= iterations <= 100 or not 2 <= candidates_per_iteration <= 256:
         raise JudgeJevError("iterations must be 1..100 and candidates must be 2..256")
+    if minimum_support < 1:
+        raise JudgeJevError("minimum support must be at least 1")
     policy = load_cost_policy(cost_policy_path)
-    rows = join_corpus(read_jsonl(cases_path), read_jsonl(results_path))
+    try:
+        cases = validate_cases(read_jsonl(cases_path))
+        raw_results = read_jsonl(results_path)
+        index_results(raw_results)
+    except (ValueError, OSError) as err:
+        raise JudgeJevError(str(err)) from err
+    rows = join_corpus(
+        cases,
+        raw_results,
+        rubric_id=rubric_id,
+        allow_legacy_provenance=synthetic_demo,
+    )
     support_warning = None
     try:
         support = validate_support(rows, policy.get("required_classes", []), minimum_support)
@@ -363,10 +490,19 @@ def threshold_search(
     rng = random.Random(seed)
     means = {parameter.name: parameter.initial for parameter in parameters}
     stds = {parameter.name: max((parameter.high - parameter.low) / 6.0, 1e-6) for parameter in parameters}
-    baseline_metrics = evaluate_candidate(rubric, rows, policy, reroute=reroute)
-    all_candidates: list[Candidate] = [
-        Candidate(dict(means), baseline_metrics, baseline_metrics["negative_expected_cost_reward"], True)
-    ]
+    train_rows = [row for row in rows if row["split"] == "train"]
+    baseline_train = evaluate_candidate(rubric, train_rows, policy, reroute=reroute)
+    if float(policy.get("token_cost_per_1000", 0.0)) > 0 and not baseline_train["usage_complete"]:
+        raise JudgeJevError(
+            "training results have unknown token usage; the declared token-cost term cannot be evaluated"
+        )
+    baseline_candidate = Candidate(
+            dict(means),
+            baseline_train,
+            baseline_train["negative_expected_cost_reward"],
+            True,
+        )
+    all_candidates: list[Candidate] = [baseline_candidate]
     iteration_reports = []
     for iteration in range(iterations):
         group: list[Candidate] = []
@@ -379,12 +515,13 @@ def threshold_search(
                 for parameter in parameters
             }
             candidate_rubric = apply_candidate(rubric, parameters, values)
-            metrics = evaluate_candidate(candidate_rubric, rows, policy, reroute=reroute)
-            redteam = _redteam_non_regression(baseline_metrics, metrics, rows)
-            reward = metrics["negative_expected_cost_reward"] if redteam else float("-inf")
-            group.append(Candidate(values, metrics, reward, redteam))
-        finite_rewards = [candidate.reward if math.isfinite(candidate.reward) else -1e12 for candidate in group]
-        advantages = group_advantages(finite_rewards)
+            # The adaptive distribution sees training rows only. Held-out and
+            # frozen-red-team labels are not consulted until search has stopped.
+            metrics = evaluate_candidate(candidate_rubric, train_rows, policy, reroute=reroute)
+            reward = metrics["negative_expected_cost_reward"]
+            group.append(Candidate(values, metrics, reward, True))
+        rewards = [candidate.reward for candidate in group]
+        advantages = group_advantages(rewards)
         weights = [math.exp(max(-20.0, min(20.0, advantage))) for advantage in advantages]
         weight_sum = sum(weights)
         if weight_sum > 0 and any(advantage != 0 for advantage in advantages):
@@ -400,13 +537,30 @@ def threshold_search(
         iteration_reports.append(
             {
                 "iteration": iteration,
-                "rewards": finite_rewards,
+                "rewards": rewards,
                 "advantages": advantages,
                 "distribution": {name: {"mean": means[name], "std": stds[name]} for name in means},
             }
         )
-    frontier = pareto_front(all_candidates)
-    rubric_path = repo_root() / "shared" / "rubrics" / f"{rubric_id}.yaml"
+    # Post-search checks are intentionally bounded and cannot affect the learned
+    # distribution. They expose held-out tradeoffs and enforce the evaluator's
+    # exact per-case frozen-red-team baseline gate.
+    shortlisted = sorted(all_candidates, key=lambda item: item.reward, reverse=True)[:32]
+    if baseline_candidate not in shortlisted:
+        shortlisted[-1] = baseline_candidate
+    evaluated_candidates: list[Candidate] = []
+    for candidate in shortlisted:
+        candidate_rubric = apply_candidate(rubric, parameters, candidate.values)
+        full_metrics = evaluate_candidate(candidate_rubric, rows, policy, reroute=reroute)
+        canonical = canonical_report(candidate_rubric, rows, reroute)
+        full_metrics["evaluation"] = canonical
+        complete = canonical["counts"]["evaluated"] == canonical["counts"]["labeled"]
+        redteam_passed = complete and canonical["redteam_regression"]["hard_gate_passed"]
+        evaluated_candidates.append(
+            Candidate(candidate.values, full_metrics, candidate.reward, redteam_passed)
+        )
+    frontier = pareto_front(evaluated_candidates)
+    rubric_path = rubrics_dir() / f"{rubric_id}.yaml"
     proposals = [
         {
             "values": candidate.values,
@@ -423,7 +577,9 @@ def threshold_search(
         "proposal_only": True,
         "api_calls": 0,
         "synthetic_demo": synthetic_demo,
-        "quality_claim_allowed": not synthetic_demo and support_warning is None,
+        "quality_claim_allowed": (
+            not synthetic_demo and support_warning is None and bool(proposals)
+        ),
         "support": support,
         "support_warning": support_warning,
         "seed": seed,
@@ -431,7 +587,17 @@ def threshold_search(
         "candidates_per_iteration": candidates_per_iteration,
         "parameters": [asdict(parameter) for parameter in parameters],
         "cost_policy": policy,
-        "baseline": baseline_metrics,
+        "search_fit_split": "train",
+        "heldout_and_redteam_used_during_adaptation": False,
+        "baseline": next(
+            (
+                candidate.metrics
+                for candidate in evaluated_candidates
+                if candidate.values == {parameter.name: parameter.initial for parameter in parameters}
+            ),
+            baseline_train,
+        ),
         "iterations_report": iteration_reports,
+        "postsearch_candidates_evaluated": len(evaluated_candidates),
         "pareto_frontier": proposals,
     }

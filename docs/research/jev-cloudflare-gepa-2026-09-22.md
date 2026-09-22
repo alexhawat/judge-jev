@@ -27,3 +27,11 @@ selection. `GEPAAdapter.evaluate` returns aligned outputs/scores and optional
 trajectories; `make_reflective_dataset` converts real traces into feedback records.
 The integration implements those methods and invokes the actual optional package. It
 does not label a custom mutation loop as GEPA.
+
+Neither verified Jev provider contract exposes a request-level hard output-token
+limit. A client can observe usage only after a paid response, which is too late to
+guarantee the requested cap; GEPA's reflector cost stopper is also post-response.
+The integration therefore offers explicit pre-dispatch call-count limits with retries
+disabled and reports spend measurements separately. Strict token/dollar mode refuses
+before any provider or reflector call. This is an external contract limitation rather
+than a simulated safety claim.

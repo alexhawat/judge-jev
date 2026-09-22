@@ -6,10 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from judge_jev.backend import JEV_CAPABILITIES, BackendResponse
 from judge_jev.gepa_tuning import (
     BudgetLedger,
+    CallLimitedLM,
     JevGEPAAdapter,
     SemanticCache,
+    _live_evaluator,
     instruction_proposal,
 )
 from judge_jev.models import JudgeJevError
@@ -21,6 +24,25 @@ class FakeBatch:
     outputs: list
     scores: list
     trajectories: list | None = None
+
+
+def _complete_answers() -> dict:
+    return {
+        "screen.judgeable": {"type": "noul", "noul": 0.9},
+        "screen.injection": {"type": "noul", "noul": 0.1},
+        "profile.intent": {
+            "type": "choice", "choice": "answer", "confidence": 0.9, "probabilities": {}
+        },
+        "locate.hallucination_risk": {"type": "noul", "noul": 0.1},
+        "locate.harmful": {"type": "noul", "noul": 0.1},
+        "score.helpfulness": {
+            "type": "score", "score": 3.1, "confidence": 0.9, "probabilities": {}
+        },
+        "score.coherence": {
+            "type": "score", "score": 3.2, "confidence": 0.9, "probabilities": {}
+        },
+        "route.escalate": {"type": "noul", "noul": 0.1},
+    }
 
 
 def _cases(path: Path) -> None:
@@ -60,7 +82,7 @@ def test_semantic_cache_is_hashed_atomic_and_recovers_corruption(tmp_path: Path)
     assert "secret" not in key
     cache.put(key, {"answers": {"q": 1}})
     assert cache.get(key) == {"answers": {"q": 1}}
-    path = tmp_path / f"{key}.json"
+    path = tmp_path / f"judge-jev-gepa-v1-{key}.json"
     path.write_text("broken")
     assert cache.get(key) is None
     assert not path.exists()
@@ -83,12 +105,34 @@ def test_adapter_returns_real_disagreement_feedback_and_counts_calls() -> None:
     row = {"id": "danger", "expected_verdict": "escalate"}
     batch = adapter.evaluate([row], {"score.helpfulness": "wording"}, capture_traces=True)
     assert len(batch.outputs) == len(batch.scores) == len(batch.trajectories) == 1
-    assert batch.scores[0] < 0.01
+    assert batch.scores[0] == pytest.approx(-(200.0 + 5 * 0.001 / 1000))
     reflective = adapter.make_reflective_dataset(
         {"score.helpfulness": "wording"}, batch, ["score.helpfulness"]
     )
     assert "Expected escalate; got pass" in reflective["score.helpfulness"][0]["Feedback"]
     assert ledger.metric_calls == 1 and ledger.actual_tokens == 5
+
+
+def test_adapter_budget_exhaustion_and_missing_usage_are_systemic() -> None:
+    exhausted = JevGEPAAdapter(
+        "q",
+        lambda _row, _instruction: {"verdict": "pass", "usage": {"input_tokens": 1, "output_tokens": 1}},
+        load_cost_policy(),
+        BudgetLedger(0, 10, 10),
+        FakeBatch,
+    )
+    with pytest.raises(JudgeJevError, match="budget exhausted"):
+        exhausted.evaluate([{"id": "x", "expected_verdict": "pass"}], {"q": "text"})
+
+    missing = JevGEPAAdapter(
+        "q",
+        lambda _row, _instruction: {"verdict": "pass", "usage": {}},
+        load_cost_policy(),
+        BudgetLedger(1, 10, 10),
+        FakeBatch,
+    )
+    with pytest.raises(JudgeJevError, match="usage"):
+        missing.evaluate([{"id": "x", "expected_verdict": "pass"}], {"q": "text"})
 
 
 def test_instruction_dry_run_imports_no_gepa_and_calls_no_model(tmp_path: Path) -> None:
@@ -107,16 +151,96 @@ def test_instruction_dry_run_imports_no_gepa_and_calls_no_model(tmp_path: Path) 
     assert report["preserved"]["question_type"] == "score"
 
 
+def test_unsupported_hard_spend_mode_refuses_before_any_model_call(tmp_path: Path) -> None:
+    cases = tmp_path / "cases.jsonl"
+    _cases(cases)
+    with pytest.raises(JudgeJevError, match="hard-spend mode is unavailable"):
+        instruction_proposal(
+            "assistant-reply",
+            "score.helpfulness",
+            cases,
+            live=True,
+            budget_mode="hard-spend",
+            metric_budget=20,
+            reflection_call_budget=2,
+            task_token_cap=2000,
+            max_tokens_per_call=100,
+            reflection_cost_cap=1.0,
+            reflection_model="unused/model",
+            minimum_support=1,
+            optimize_fn=lambda **_kwargs: pytest.fail("optimizer must not run"),
+            batch_factory=FakeBatch,
+        )
+
+
+def test_reflection_call_budget_reserves_before_single_and_batch_calls() -> None:
+    prompts = []
+
+    def lm(prompt):
+        prompts.append(prompt)
+        return "ok"
+
+    limited = CallLimitedLM(lm, 2)
+    assert limited("one") == "ok"
+    with pytest.raises(JudgeJevError, match="reflection-call budget"):
+        limited.batch_complete([[{"role": "user", "content": "two"}], [{"role": "user", "content": "three"}]])
+    assert prompts == ["one"]
+
+
+def test_live_evaluator_runs_validation_routing_and_gates(monkeypatch, tmp_path: Path) -> None:
+    from judge_jev.canonical import CanonicalState
+    from judge_jev.rubric import load_rubric
+    from judge_jev.typesafe_client import MockEngine, build_questions
+
+    rubric = load_rubric("assistant-reply")
+    state = CanonicalState.of({"prompt": "p", "reply": "r", "context": {}})
+    answers, usage, request_id, model = MockEngine().system_one(
+        state, build_questions(rubric), rubric.model
+    )
+
+    calls = 0
+
+    class FakeBackend:
+        capabilities = JEV_CAPABILITIES
+
+        def system_one(self, *_args):
+            nonlocal calls
+            calls += 1
+            return BackendResponse(
+                answers, usage, request_id, rubric.model, model, "live_model"
+            )
+
+    monkeypatch.setattr("judge_jev.gepa_tuning.make_backend", lambda _backend: FakeBackend())
+    cache = SemanticCache(tmp_path / "cache")
+    evaluate = _live_evaluator("assistant-reply", "score.helpfulness", "typesafe", cache)
+    output = evaluate(
+        {"id": "x", "input": {"prompt": "p", "reply": "r", "context": {}}},
+        "Judge helpfulness precisely.",
+    )
+    assert output["verdict"] in {"pass", "fail", "review", "escalate", "skip"}
+    assert output["routing_trace"]["matched_rule_id"]
+    assert output["deterministic_gates"]
+    cached = evaluate(
+        {"id": "x", "input": {"prompt": "p", "reply": "r", "context": {}}},
+        "Judge helpfulness precisely.",
+    )
+    assert calls == 1
+    assert cached["newly_billed_tokens"] == 0
+    stored = json.loads(next((tmp_path / "cache").glob("judge-jev-gepa-v1-*.json")).read_text())
+    assert "answers" in stored and "verdict" not in stored
+
+
 def test_fake_gepa_contract_budget_and_independent_gates(tmp_path: Path) -> None:
     cases = tmp_path / "cases.jsonl"
     _cases(cases)
     calls = {}
 
     class Result:
-        best_candidate = {"score.helpfulness": "Clearer proposed instruction."}
-        total_metric_calls = 1
-        best_score = 0.8
-        candidates = [{"score.helpfulness": "old"}, best_candidate]
+        def __init__(self) -> None:
+            self.best_candidate = {"score.helpfulness": "Clearer proposed instruction."}
+            self.total_metric_calls = 1
+            self.best_score = 0.8
+            self.candidates = [{"score.helpfulness": "old"}, self.best_candidate]
 
     def optimize_fn(**kwargs):
         calls.update(kwargs)
@@ -129,9 +253,94 @@ def test_fake_gepa_contract_budget_and_independent_gates(tmp_path: Path) -> None
         # Proposal and baseline both preserve the expected verdict, so the frozen
         # red-team exact per-case gate passes.
         return {
+            "rubric_id": "assistant-reply",
+            "rubric_version": "3.0.0",
             "verdict": row["expected_verdict"],
             "deciding_answers": ["score.helpfulness"],
             "routing_reason": f"evaluated {instruction}",
+            "answers": _complete_answers(),
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    evaluator.hard_token_limit = 100
+
+    report = instruction_proposal(
+        "assistant-reply",
+        "score.helpfulness",
+        cases,
+        live=True,
+        budget_mode="calls",
+        metric_budget=60,
+        reflection_call_budget=2,
+        reflection_model=lambda _prompt: "```Clearer proposed instruction.```",
+        minimum_support=1,
+        optimize_fn=optimize_fn,
+        batch_factory=FakeBatch,
+        evaluator=evaluator,
+    )
+    assert calls["max_metric_calls"] == 24  # 60 minus baseline + two all-split candidate gates
+    assert "max_reflection_cost" not in calls
+    assert calls["candidate_selection_strategy"] == "pareto"
+    assert report["api_calls"] == 37
+    assert report["metric_call_limit"] == 60
+    assert report["reflection_call_limit"] == 2
+    assert report["hard_token_or_dollar_cap"] is False
+    assert report["redteam_hard_gate_passed"] is True
+    assert "Clearer proposed instruction" in report["diff"]
+    assert "criteria:" in report["diff"]
+
+
+def test_actual_pinned_gepa_optimize_exercises_adapter_and_reflection() -> None:
+    gepa = pytest.importorskip("gepa")
+    from gepa.core.adapter import EvaluationBatch
+
+    def evaluator(_row, instruction):
+        return {
+            "verdict": "pass" if instruction == "better" else "review",
+            "deciding_answers": [],
+            "routing_reason": "offline fake",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    adapter = JevGEPAAdapter(
+        "q", evaluator, load_cost_policy(), BudgetLedger(10, 100, 10), EvaluationBatch
+    )
+    row = {"id": "one", "expected_verdict": "pass"}
+    result = gepa.optimize(
+        seed_candidate={"q": "old"},
+        trainset=[row],
+        valset=[row],
+        adapter=adapter,
+        reflection_lm=lambda _prompt: "```better```",
+        reflection_minibatch_size=1,
+        max_metric_calls=4,
+        max_reflection_cost=1.0,
+        cache_evaluation=True,
+        display_progress_bar=False,
+        seed=1,
+    )
+    assert result.best_candidate == {"q": "better"}
+    assert 4 <= result.total_metric_calls <= 10
+    assert adapter.ledger.metric_calls == result.total_metric_calls
+
+
+def test_public_call_budget_mode_runs_actual_pinned_gepa_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("gepa")
+    cases = tmp_path / "cases.jsonl"
+    _cases(cases)
+    monkeypatch.setenv("JUDGE_JEV_MAX_RETRIES", "7")
+
+    def evaluator(row, instruction):
+        predicted = row["expected_verdict"] if instruction == "better" else "review"
+        return {
+            "rubric_id": "assistant-reply",
+            "rubric_version": "3.0.0",
+            "verdict": predicted,
+            "deciding_answers": ["score.helpfulness"],
+            "routing_reason": f"offline {instruction}",
+            "answers": _complete_answers(),
             "usage": {"input_tokens": 1, "output_tokens": 1},
         }
 
@@ -140,20 +349,23 @@ def test_fake_gepa_contract_budget_and_independent_gates(tmp_path: Path) -> None
         "score.helpfulness",
         cases,
         live=True,
-        metric_budget=20,
-        task_token_cap=2000,
-        max_tokens_per_call=100,
-        reflection_cost_cap=1.0,
-        reflection_model="fake/model",
+        budget_mode="calls",
+        metric_budget=60,
+        reflection_call_budget=1,
+        reflection_model=lambda _prompt: "```better```",
         minimum_support=1,
-        optimize_fn=optimize_fn,
-        batch_factory=FakeBatch,
         evaluator=evaluator,
+        seed=1,
     )
-    assert calls["max_metric_calls"] == 4  # 20 minus 2 * (4 heldout + 4 redteam)
-    assert calls["max_reflection_cost"] == 1.0
-    assert calls["candidate_selection_strategy"] == "pareto"
-    assert report["api_calls"] == 17
-    assert report["redteam_hard_gate_passed"] is True
-    assert "Clearer proposed instruction" in report["diff"]
-    assert "criteria:" in report["diff"]
+    assert report["status"] == "proposal generated for review"
+    assert report["api_calls"] <= 60
+    assert report["reflection_calls"] == 1
+    assert report["provider_retries"] == 0
+    assert report["hard_token_or_dollar_cap"] is False
+    assert "better" in report["diff"]
+    assert report["candidate_proposals"]
+    assert all(
+        set(candidate["metrics"]["per_split"]) == {"train", "heldout", "frozen-redteam"}
+        for candidate in report["candidate_proposals"]
+    )
+    assert __import__("os").environ["JUDGE_JEV_MAX_RETRIES"] == "7"
