@@ -126,7 +126,7 @@ fn merge(existing: &mut Value, addition: Value) {
 /// Keep only what a rubric declares, dropping the mock override block.
 pub fn filter_state(raw: &Value, paths: &[StatePath]) -> Result<Value> {
     let Some(obj) = raw.as_object() else {
-        return Ok(raw.clone());
+        bail!("input must be a JSON object, got {}", json_kind(raw));
     };
     if paths.is_empty() {
         let mut kept = obj.clone();
@@ -141,12 +141,14 @@ pub fn filter_state(raw: &Value, paths: &[StatePath]) -> Result<Value> {
     let mut filtered = Value::Object(Map::new());
     let mut missing: Vec<&str> = Vec::new();
     let mut missing_required: Vec<&str> = Vec::new();
+    let mut resolved: Vec<(Vec<Segment>, Value)> = Vec::new();
     for entry in paths {
         if entry.path == MOCK_ANSWERS_KEY {
             continue;
         }
-        match project(&source, &parse_path(&entry.path)?) {
-            Some(projected) => merge(&mut filtered, projected),
+        let segments = parse_path(&entry.path)?;
+        match project(&source, &segments) {
+            Some(projected) => resolved.push((segments, projected)),
             None if entry.required => missing_required.push(&entry.path),
             None => missing.push(&entry.path),
         }
@@ -165,7 +167,27 @@ pub fn filter_state(raw: &Value, paths: &[StatePath]) -> Result<Value> {
             missing.join(", ")
         );
     }
+    resolved.sort_by_key(|(segments, _)| segments.len());
+    let mut selected: Vec<Vec<Segment>> = Vec::new();
+    for (segments, projected) in resolved {
+        if selected.iter().any(|parent| segments.starts_with(parent)) {
+            continue;
+        }
+        merge(&mut filtered, projected);
+        selected.push(segments);
+    }
     Ok(filtered)
+}
+
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 #[cfg(test)]
@@ -317,6 +339,33 @@ mod tests {
         let mut keys: Vec<&String> = filtered.as_object().unwrap().keys().collect();
         keys.sort();
         assert_eq!(keys, vec!["final_output", "goal", "steps"]);
+    }
+
+    #[test]
+    fn json_null_is_selected_and_satisfies_required_path() {
+        let declared = vec![StatePath {
+            path: "a".into(),
+            required: true,
+        }];
+        assert_eq!(
+            filter_state(&json!({"a": null}), &declared).unwrap(),
+            json!({"a": null})
+        );
+    }
+
+    #[test]
+    fn parent_selection_wins_over_descendant_regardless_of_order() {
+        let raw = json!({"a": [1, {"x": 2, "keep": 3}, null]});
+        for declared in [paths(&["a", "a[].x"]), paths(&["a[].x", "a"])] {
+            assert_eq!(filter_state(&raw, &declared).unwrap(), raw);
+        }
+    }
+
+    #[test]
+    fn non_object_input_is_rejected_at_filter_boundary() {
+        for value in [json!(null), json!([]), json!("text"), json!(1), json!(true)] {
+            assert!(filter_state(&value, &[]).is_err());
+        }
     }
 
     #[test]

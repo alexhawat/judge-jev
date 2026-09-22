@@ -6,8 +6,14 @@ on:
   pull_request:
 
 jobs:
-  python:
+  python-matrix:
+    name: python (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -15,7 +21,7 @@ jobs:
           cache-dependency-path: python/uv.lock
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
       - name: Install and test Python runtime
         run: |
           cd python
@@ -26,10 +32,35 @@ jobs:
           cd python
           uv sync --locked --dev --extra tracing
           uv run --extra tracing pytest tests/test_tracing.py -q
+      - name: Test pinned optional GEPA contract
+        run: |
+          cd python
+          uv sync --locked --dev --extra tuning
+          uv run --extra tuning python -c 'from gepa import optimize; assert callable(optimize)'
+          uv run --extra tuning pytest tests/test_gepa_tuning.py -q
       - name: Smoke CLI (mock)
         run: |
           cd python
           uv run judge-jev run --rubric assistant-reply --input ../fixtures/assistant-reply-pass.json --mock
+
+  # Keep the branch-protection contract stable while testing every supported
+  # Python version independently. This job must run even when a matrix job does
+  # not, and only succeeds when the complete matrix succeeded.
+  python:
+    name: python
+    runs-on: ubuntu-latest
+    needs: python-matrix
+    if: ${{ always() }}
+    steps:
+      - name: Require every supported Python job to pass
+        env:
+          MATRIX_RESULT: ${{ needs.python-matrix.result }}
+        run: |
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "Python matrix result: $MATRIX_RESULT" >&2
+            exit 1
+          fi
+          echo "Python matrix result: success"
 
   rust:
     runs-on: ubuntu-latest
@@ -103,6 +134,8 @@ jobs:
         run: JUDGE_JEV_RUNTIME=python bash examples/run-all.sh
       - name: Examples behave as documented (rust)
         run: JUDGE_JEV_RUNTIME=rust bash examples/run-all.sh
+      - name: Pipeline handles every exit class before parsing JSON
+        run: bash scripts/check-pipeline-example.sh
 
   # mergeCraft's action pin is written twice in one file: the `uses:` ref, and the
   # MERGECRAFT_ACTION_SHA the container reads because `uses:` is not visible from
@@ -157,3 +190,5 @@ jobs:
               jsonschema.validate(yaml.safe_load(path.read_text()), schema)
               print(f"ok {path.name}")
           PY
+      - name: Packaged Rust assets must match shared sources
+        run: bash scripts/check-bundled-assets.sh

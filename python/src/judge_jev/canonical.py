@@ -39,8 +39,24 @@ log is the number of bytes that were actually sent.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
+
+
+def strict_json_loads(text: str) -> Any:
+    """Parse RFC JSON and reject Python's non-standard NaN/Infinity spellings."""
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite number {value} is not valid JSON")
+
+    def finite_float(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError(f"non-finite number {value} is not valid JSON")
+        return parsed
+
+    return json.loads(text, parse_constant=reject_constant, parse_float=finite_float)
 
 
 def canonical_json(value: Any) -> str:

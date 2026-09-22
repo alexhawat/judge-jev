@@ -2,35 +2,70 @@
 
 
 
-Jev-native judge kit for LLM outputs (assistant replies, agent trajectories). Dual production runtimes share rubrics, schemas, and CLI behavior.
+Judge Jev evaluates assistant replies and agent trajectories against versioned,
+inspectable rubrics, then returns pass, fail, review, escalate, or skip. It offers a
+readable Python frontend and matching Python/Rust machine engines.
 
-## Agent-first setup
+## Try it offline
 
-**Coding agents: read [AGENTS.md](AGENTS.md) and [llms.txt](llms.txt) before changing or running anything.**
-
-Quick start:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run this
+copy-safe setup. Installation downloads dependencies; the canned judging demo
+makes no model call and needs no API key.
 
 ```bash
-git clone git@github.com:alexhawat/judge-jev.git
+git clone https://github.com/alexhawat/judge-jev.git
 cd judge-jev
-bash scripts/setup.sh                    # picks python or rust → .judge-jev/runtime
-export TYPESAFE_API_KEY=...              # optional for live mode
-./scripts/judge-jev run --rubric assistant-reply --input fixtures/assistant-reply-pass.json --mock
+JUDGE_JEV_RUNTIME=python bash scripts/setup.sh
+./scripts/judge-jev
+```
+
+The last command opens an interactive menu; select a canned demo to stay offline.
+You can also run the demo directly:
+
+```bash
+./scripts/judge-jev reply --prompt 'What is 2+2?' --reply '4' --mock
+# Output begins: DEMO — CANNED ANSWERS — PASS
 bash examples/run-all.sh                 # six end-to-end examples, mocked and offline
+```
+
+Mock answers are canned. The demo proves installation and routing mechanics, not
+that the reply is safe or correct.
+
+## Run a live judgment
+
+Set the API key only when you intend to make a real, potentially billed call:
+
+```bash
+export TYPESAFE_API_KEY=...
+./scripts/judge-jev reply --prompt 'What is 2+2?' --reply '4'
 ```
 
 On Windows, use `pwsh scripts/setup.ps1` and `pwsh scripts/judge-jev.ps1` in place
 of the bash scripts above — same runtime selection, same argument contract, same
 exit codes.
 
+## Agent and contributor setup
+
+Coding agents and contributors should read [AGENTS.md](AGENTS.md) and
+[llms.txt](llms.txt) before changing or automating the project.
+
 ## CLI
 
 | Command | Description |
 |---------|-------------|
 | `judge-jev setup` | Choose/install runtime |
-| `judge-jev run --rubric <id> --input <path\|-> [--mock]` | Run funnel → JSON `JudgmentResult` on stdout |
+| `judge-jev init` / `doctor` | Explain setup and run an offline smoke check |
+| `judge-jev reply [--prompt ... --reply ...] [--mock]` | Beginner frontend for an assistant reply |
+| `judge-jev trajectory --input <path\|-> [--mock]` | Beginner frontend for an agent trajectory |
+| `judge-jev input template\|validate ...` | Create or validate input without a network call |
+| `judge-jev run --rubric <id> --input <path\|-> [--mock]` | Machine funnel → JSON `JudgmentResult` on stdout |
 | `judge-jev rubric list\|show --id <id>` | Inspect shared rubrics |
 | `judge-jev replay --input <result.json\|-> [--allow-version-drift]` | Re-route saved answers |
+| `judge-jev explain --input <result.json\|->` | Explain rule comparisons and gate overrides offline |
+| `judge-jev history list\|show\|replay\|delete` | Manage opt-in, result-only local history |
+| `judge-jev capture prune --dir <dir> --older-than 30d [--apply]` | Preview or enforce capture retention |
+| `judge-jev tune thresholds ...` | Propose numeric rubric changes offline (Python frontend) |
+| `judge-jev tune instructions ...` | Plan or explicitly run budgeted GEPA proposals (Python frontend) |
 | `judge-jev --version` | Print the runtime and its version |
 
 Exit codes — verdicts: `0` pass, `1` fail, `2` review, `3` escalate, `4` skip.
@@ -43,8 +78,17 @@ A malformed command line is `11` in both runtimes, with the same message — nev
 `--input -` reads stdin, so a hook can pipe the state it already has instead of
 writing a temp file, and `run | replay` composes.
 
-Use `./scripts/judge-jev` from repo root (dispatches via `.judge-jev/runtime`).
-On Windows, use `pwsh scripts/judge-jev.ps1` — same args, same exit codes.
+`run` and `replay` default to `--format json`; guided commands default to
+`--format human`. Add `--save` to opt into local history. History stores only the
+result with restrictive permissions and a 100-result retention limit; raw prompt,
+reply, context, and trajectory input are never silently saved. Deleting every
+entry requires `history delete --all --confirm-all`.
+
+Use `./scripts/judge-jev` from any working directory. Runtime selection is explicit
+`JUDGE_JEV_RUNTIME`, then the saved `.judge-jev/runtime` preference, then Python.
+Human-only commands and an interactive no-argument launch use Python because the
+Rust frontend does not implement them. Noninteractive invocations never prompt.
+On Windows, use `pwsh scripts/judge-jev.ps1` — same args and exit codes.
 
 ## Examples
 
@@ -72,6 +116,8 @@ Each rubric implements: **screen → profile → locate → score → route**
 - Routing rules are **declarative data** in the rubric YAML, evaluated identically by
   both runtimes. No runtime interprets a rule as code.
 - `--mock` provides deterministic CI-friendly answers without `TYPESAFE_API_KEY`.
+- `--backend typesafe|cloudflare|replay` selects a capability-declared provider;
+  `--mock` remains an alias for canned replay.
 
 ### Routing rules
 
@@ -132,15 +178,33 @@ is downgraded to `review`. `review`, `escalate`, and `skip` are not gated.
 
 ### JudgmentResult contract fields
 
-Every result includes `rubric_id`, `rubric_version`, resolved `model`, `state_projection`
+Every result includes `rubric_id`, `rubric_version`, `rubric_hash`, resolved `model`, `state_projection`
 (allowlisted paths + hash + projected keys), and `deterministic_gates` (code-run gate
 outcomes). TypeSafe/API failures exit `10` and never emit a scored pass/fail verdict.
-The projection hash covers only the sorted allowlisted path names, serialized as
+`rubric_hash` covers the complete effective policy: model, stakes and floors,
+state-filter required flags, questions/instructions/criteria, and ordered routing
+rules. Source rubric fields preserve the policy under which replayed answers were
+collected. Same-version content drift requires `--allow-version-drift`; legacy
+results without a content hash remain readable with an explicit limitation.
+
+The distinct projection hash covers only the sorted allowlisted path names, serialized as
 compact JSON with non-ASCII code points escaped. It does not hash projected values
 or the rest of the rubric.
 On replay, answer completeness and the confidence floor are recomputed from the
 current answers and rubric. Input-only gates retain explicitly labeled historical
 evidence when it was saved; otherwise they are `skip` because raw state is unavailable.
+
+It also records the selected `backend`, rubric `requested_model`, and whether the
+answers are live, recorded, or a canned demo. See [`docs/backends.md`](docs/backends.md).
+
+### Opt-in capture and proposal tooling
+
+`run --capture <dir>` (or `JUDGE_JEV_CAPTURE`) collects bounded JSONL evidence through
+a background writer. Repeat `--redact` for fields that must never persist. Captures
+combine an independent audit slice with uncertainty, boundary, downgrade, per-rule,
+and non-pass enrichment; only the audit stream is an unbiased sample. Capture failure
+never changes a verdict. Retention and both proposal workflows are documented in
+[`docs/capture-and-tuning.md`](docs/capture-and-tuning.md).
 
 ### Optional tracing (Python)
 
@@ -179,16 +243,24 @@ examples/                # runnable end-to-end examples
 Both runtimes must produce the same `JudgmentResult` for the same input;
 `scripts/check-parity.sh` enforces it in CI.
 
+Python wheels include the shipped rubrics and schemas, and standalone Rust binaries
+embed the shipped rubrics. `JUDGE_JEV_ROOT` still selects an external checkout or
+custom asset root explicitly; an invalid explicit root is an error and never falls
+back silently.
+
 Set `JUDGE_JEV_RUNTIME=python|rust` or run setup interactively.
 
 ### Environment
 
 | Variable | Effect |
 |----------|--------|
-| `JUDGE_JEV_RUNTIME` | `python` or `rust`, when `.judge-jev/runtime` is absent |
+| `JUDGE_JEV_RUNTIME` | `python` or `rust`; overrides `.judge-jev/runtime` for machine commands |
 | `TYPESAFE_API_KEY` | Required for live judging |
+| `JUDGE_JEV_BACKEND` | `typesafe` (default), `cloudflare`, or `replay`; an explicit `--backend` wins |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | Required by the Cloudflare backend |
+| `JUDGE_JEV_CAPTURE` | Opt-in capture directory; unset means no production data is stored |
 | `JUDGE_JEV_TOKEN_BUDGET` | Ceiling, in estimated tokens, for one System One request (default `32000`). The estimate covers the filtered state and the rubric's questions together and is logged at INFO on every run. Exceeding it exits `10` before anything is sent, naming the largest contributing key. Must be a positive integer. |
-| `JUDGE_JEV_MAX_RETRIES` | Retries after the initial attempt on a 408, 429, 5xx, connection or timeout error (default `2`, matching `typesafe-sdk`). `0` disables retries. Both runtimes read it; backoff is 0.5s doubling to a 5s cap with jitter, under a 30s total budget per call. |
+| `JUDGE_JEV_MAX_RETRIES` | Retries after the initial attempt on a 408, 429, 5xx, connection or timeout error (default `2`, matching `typesafe-sdk`). `0` disables retries. Backoff is 0.5s doubling to a 5s cap with jitter. Rust enforces a strict 30s monotonic deadline across requests and sleeps. Python passes the SDK's documented 30s retry budget plus 10s per-operation timeout; the SDK stops before a retry that would exceed its budget but does not preempt an in-flight operation at the remaining-budget boundary. |
 | `JUDGE_JEV_LOGFIRE_TOKEN` | Optional Logfire write token (Python `[tracing]` extra). The token selects the project and region. |
 | `JUDGE_JEV_LOGFIRE_REGION` | Optional `eu` or `us` host override. Unset, the token's region is used. |
 

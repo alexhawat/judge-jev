@@ -137,6 +137,25 @@ else
   compare_results "$TMP/py.json" "$TMP/rs.json" "stdin-run" || failed=1
 fi
 
+# Invalid input is an operational refusal in both runtimes. In particular, an
+# overflowing JSON exponent must not become Python `inf` and reach filtering.
+printf '%s\n' '[1,2,3]' >"$TMP/non-object.json"
+printf '%s\n' '{"prompt":"p","reply":"r","unselected":1e999}' >"$TMP/nonfinite.json"
+for invalid in non-object nonfinite; do
+  set +e
+  py run --rubric assistant-reply --input "$TMP/$invalid.json" --mock >"$TMP/py-invalid.out" 2>/dev/null
+  py_exit=$?
+  rs run --rubric assistant-reply --input "$TMP/$invalid.json" --mock >"$TMP/rs-invalid.out" 2>/dev/null
+  rs_exit=$?
+  set -e
+  if [[ "$py_exit" != 10 || "$rs_exit" != 10 || -s "$TMP/py-invalid.out" || -s "$TMP/rs-invalid.out" ]]; then
+    echo "FAIL $invalid: expected empty stdout and exit 10 (python=$py_exit rust=$rs_exit)" >&2
+    failed=1
+  else
+    echo "ok   $invalid: both refuse before judgment with exit 10"
+  fi
+done
+
 # ------------------------------------------------------------------ replay (#6)
 # Replay was never covered, which is how the usage/request_id shape drifted.
 py run --rubric assistant-reply --input "$STDIN_INPUT" --mock >"$TMP/saved.json" 2>/dev/null
@@ -509,6 +528,7 @@ state_filter:
   - steps[].tool
   - steps[].input
   - ticket.subject
+  - extremes
   - final_output
 questions:
   screen.judgeable:
@@ -547,6 +567,15 @@ cat >"$TMP/paths-input.json" <<'JSON'
     { "tool": "read", "input": "README.md", "output": "DROPPED-step-output" }
   ],
   "ticket": { "subject": "card declined", "body": "DROPPED-ticket-body" },
+  "extremes": {
+    "i64_min": -9223372036854775808,
+    "i64_max": 9223372036854775807,
+    "u64_max": 18446744073709551615,
+    "larger": 1234567890123456789012345678901234567890,
+    "escaped": "line\nquote\"slash\\tab\t",
+    "floats": [0.1, -0.0, 1e-7, 1e20],
+    "nested_unsorted": { "z": null, "a": [true, false, null] }
+  },
   "final_output": "done",
   "unlisted": "DROPPED-unlisted-key"
 }
@@ -736,6 +765,19 @@ elif [[ "$py_reqs" != 1 || "$rs_reqs" != 1 ]]; then
   failed=1
 else
   echo "ok   no-retry-4xx: both gave up after 1 attempt"
+fi
+
+# Dynamic timestamps and runtime identities intentionally differ in production.
+# With those fixed by the shared fixture, both record builders must emit the same
+# complete canonical JSONL bytes, including nested redaction and gate/usage evidence.
+if (cd "$ROOT/python" && uv run pytest -q \
+  tests/test_backend_capture.py::test_capture_record_bytes_match_shared_cross_runtime_fixture) \
+  && (cd "$ROOT/rust" && cargo test --quiet --lib \
+    capture::tests::record_bytes_match_shared_cross_runtime_fixture); then
+  echo "ok   capture-record-v1: both runtimes match the shared canonical bytes"
+else
+  echo "FAIL capture-record-v1: canonical capture fixture mismatch" >&2
+  failed=1
 fi
 
 if [[ "$failed" != 0 ]]; then

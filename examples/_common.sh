@@ -5,7 +5,7 @@
 
 EX_HERE="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
 EX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-JUDGE="$EX_ROOT/scripts/judge-jev"
+JUDGE="${JUDGE_JEV_EXAMPLE_RUNNER:-$EX_ROOT/scripts/judge-jev}"
 
 # Mock is the default so every example runs offline, for free, and reaches the same
 # verdict on every machine. Mock answers are canned: a mocked judgment is a test of

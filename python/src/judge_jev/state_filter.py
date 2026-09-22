@@ -72,6 +72,7 @@ from judge_jev.typesafe_client import MOCK_ANSWERS_KEY
 
 # A `[]` segment: map over the list at this point.
 EACH = object()
+MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -111,10 +112,11 @@ def parse_path(path: str) -> tuple[Any, ...]:
     return tuple(segments)
 
 
-def _project(value: Any, segments: tuple[Any, ...]) -> Any | None:
+def _project(value: Any, segments: tuple[Any, ...]) -> Any:
     """The part of *value* that *segments* selects, keeping the original shape.
 
-    None means the path does not resolve here.
+    MISSING means the path does not resolve here. JSON null is a real selected
+    value and must remain distinguishable from absence.
     """
     if not segments:
         return value
@@ -122,7 +124,7 @@ def _project(value: Any, segments: tuple[Any, ...]) -> Any | None:
 
     if head is EACH:
         if not isinstance(value, list):
-            return None
+            return MISSING
         if not rest:
             return list(value)
         # An element that does not carry the projected field contributes an empty
@@ -130,14 +132,14 @@ def _project(value: Any, segments: tuple[Any, ...]) -> Any | None:
         projected = []
         for element in value:
             child = _project(element, rest)
-            projected.append({} if child is None else child)
+            projected.append({} if child is MISSING else child)
         return projected
 
     if not isinstance(value, dict) or head not in value:
-        return None
+        return MISSING
     child = _project(value[head], rest)
-    if child is None:
-        return None
+    if child is MISSING:
+        return MISSING
     return {head: child}
 
 
@@ -167,14 +169,16 @@ def filter_state(raw: dict[str, Any], paths: list[StatePath]) -> dict[str, Any]:
     filtered: dict[str, Any] = {}
     missing: list[str] = []
     missing_required: list[str] = []
+    resolved: list[tuple[tuple[Any, ...], Any]] = []
     for entry in paths:
         if entry.path == MOCK_ANSWERS_KEY:
             continue
-        projected = _project(source, parse_path(entry.path))
-        if projected is None:
+        segments = parse_path(entry.path)
+        projected = _project(source, segments)
+        if projected is MISSING:
             (missing_required if entry.required else missing).append(entry.path)
             continue
-        _merge(filtered, projected)
+        resolved.append((segments, projected))
 
     if missing_required:
         # An operational failure, not a malformed rubric: the rubric is fine and the
@@ -187,4 +191,14 @@ def filter_state(raw: dict[str, Any], paths: list[StatePath]) -> dict[str, Any]:
     if missing:
         # Questions referencing these paths will be judging absent data.
         logger.warning("state_filter paths missing from input: {}", ", ".join(missing))
+
+    # Merge broad selections first. A selected parent owns its complete value, so
+    # a child projection can never hollow it out merely because paths were listed
+    # in a different order. Required descendants were still checked above.
+    selected: list[tuple[Any, ...]] = []
+    for segments, projected in sorted(resolved, key=lambda item: len(item[0])):
+        if any(segments[: len(parent)] == parent for parent in selected):
+            continue
+        _merge(filtered, projected)
+        selected.append(segments)
     return filtered

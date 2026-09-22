@@ -30,7 +30,7 @@ struct SystemOneRequest {
 #[derive(Debug, Serialize)]
 pub struct QuestionPayload {
     #[serde(rename = "type")]
-    qtype: String,
+    pub qtype: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,35 +41,13 @@ pub struct QuestionPayload {
 struct SystemOneResponse {
     model: String,
     usage: UsageWire,
-    answers: HashMap<String, AnswerWire>,
+    answers: HashMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
 struct UsageWire {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum AnswerWire {
-    #[serde(rename = "noul")]
-    Noul { noul: f64 },
-    #[serde(rename = "choice")]
-    Choice {
-        choice: String,
-        confidence: f64,
-        probabilities: HashMap<String, f64>,
-    },
-    #[serde(rename = "score")]
-    Score {
-        score: f64,
-        confidence: f64,
-        /// Always returned by the API; kept so a score can be interpreted downstream.
-        #[serde(default)]
-        legend: Option<HashMap<String, Value>>,
-        probabilities: HashMap<String, f64>,
-    },
 }
 
 /// Read pinned mock answers out of a fixture, if it carries any.
@@ -205,43 +183,21 @@ impl LiveClient {
             "system_one complete"
         );
 
-        let answers = parsed
+        let answers: HashMap<String, Answer> = parsed
             .answers
             .into_iter()
-            .map(|(k, v)| (k, wire_to_answer(v)))
-            .collect();
+            .map(|(key, value)| {
+                serde_json::from_value(value)
+                    .with_context(|| format!("decode TypeSafe answer '{key}'"))
+                    .map(|answer| (key, answer))
+            })
+            .collect::<Result<_>>()?;
 
         let usage = Usage {
             input_tokens: parsed.usage.input_tokens,
             output_tokens: parsed.usage.output_tokens,
         };
         Ok((answers, usage, request_id, parsed.model))
-    }
-}
-
-fn wire_to_answer(wire: AnswerWire) -> Answer {
-    match wire {
-        AnswerWire::Noul { noul } => Answer::Noul { noul },
-        AnswerWire::Choice {
-            choice,
-            confidence,
-            probabilities,
-        } => Answer::Choice {
-            choice,
-            confidence,
-            probabilities,
-        },
-        AnswerWire::Score {
-            score,
-            confidence,
-            legend,
-            probabilities,
-        } => Answer::Score {
-            score,
-            confidence,
-            legend,
-            probabilities,
-        },
     }
 }
 
@@ -274,7 +230,8 @@ pub mod mock {
         let has_reply = state
             .value
             .get("reply")
-            .map(|v| !v.is_null())
+            .and_then(|v| v.as_str())
+            .map(|v| !v.is_empty())
             .unwrap_or(false);
         let has_trajectory = state
             .value

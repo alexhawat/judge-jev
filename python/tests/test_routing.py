@@ -13,6 +13,7 @@ from judge_jev.funnel import replay_judgment, run_judgment
 from judge_jev.models import RubricError
 from judge_jev.routing import decision_confidence, route_verdict
 from judge_jev.rubric import load_rubric
+from judge_jev.rubric import rubric_content_hash
 from judge_jev.typesafe_client import JudgeJevError
 
 REPO = Path(__file__).resolve().parents[2]
@@ -246,6 +247,115 @@ def test_choice_value_must_be_a_declared_label(tmp_path, monkeypatch):
 
     with pytest.raises(RubricError, match="is not a label"):
         load_rubric("broken")
+
+
+def test_numeric_policy_values_must_be_numbers_not_quoted_strings(tmp_path, monkeypatch):
+    import yaml
+
+    source = yaml.safe_load((REPO / "shared" / "rubrics" / "assistant-reply.yaml").read_text())
+    source["confidence_floors"]["read_only"] = "0.5"
+    target = tmp_path / "broken.yaml"
+    target.write_text(yaml.safe_dump(source))
+    monkeypatch.setattr("judge_jev.rubric.rubrics_dir", lambda: tmp_path)
+    with pytest.raises(RubricError, match="must be a number"):
+        load_rubric("broken")
+
+    source["confidence_floors"]["read_only"] = 0.5
+    source["routing"]["rules"][0]["all"][0]["value"] = "0.7"
+    target.write_text(yaml.safe_dump(source))
+    with pytest.raises(RubricError, match="needs a numeric value"):
+        load_rubric("broken")
+
+
+def test_finite_unreachable_comparison_is_valid_policy(tmp_path, monkeypatch):
+    import yaml
+
+    source = yaml.safe_load((REPO / "shared" / "rubrics" / "assistant-reply.yaml").read_text())
+    source["routing"]["rules"][0]["all"][0]["value"] = 1.1
+    target = tmp_path / "custom.yaml"
+    target.write_text(yaml.safe_dump(source))
+    monkeypatch.setattr("judge_jev.rubric.rubrics_dir", lambda: tmp_path)
+    assert load_rubric("custom").rules[0].conditions[0].value == 1.1
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+def test_nonstandard_nonfinite_json_is_rejected_before_filtering(tmp_path, capsys, constant):
+    path = tmp_path / "nonfinite.json"
+    path.write_text(
+        '{"prompt":"p","reply":"r","context":null,"unselected":' + constant + "}",
+        encoding="utf-8",
+    )
+    assert main(["run", "--rubric", "assistant-reply", "--input", str(path), "--mock"]) == 10
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "not valid JSON" in captured.err
+
+
+def test_overflowing_float_is_rejected_in_replay_envelope(tmp_path, capsys):
+    path = tmp_path / "saved.json"
+    path.write_text('{"usage":{"input_tokens":1e999}}', encoding="utf-8")
+    assert main(["replay", "--input", str(path)]) == 10
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "not valid JSON" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("rubric_id", "payload", "field"),
+    [
+        ("assistant-reply", {"prompt": "p", "reply": False}, "reply"),
+        ("assistant-reply", {"prompt": [], "reply": "r"}, "prompt"),
+        (
+            "agent-trajectory",
+            {"goal": "g", "steps": "not a list", "final_output": "done"},
+            "steps",
+        ),
+    ],
+)
+def test_malformed_shipped_input_shape_is_operational_error(
+    tmp_path, capsys, rubric_id, payload, field
+):
+    path = tmp_path / "malformed.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(["run", "--rubric", rubric_id, "--input", str(path), "--mock"]) == 10
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert f"input field '{field}'" in captured.err
+
+
+def test_empty_reply_is_present_but_not_judgeable(tmp_path):
+    path = tmp_path / "empty.json"
+    path.write_text(json.dumps({"prompt": "question", "reply": "", "context": ""}))
+    assert run_judgment("assistant-reply", path, mock=True).verdict == "skip"
+
+
+def test_replay_rejects_same_version_content_drift_and_preserves_source(monkeypatch):
+    original = run_judgment("assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True)
+    saved = original.to_dict()
+    changed = deepcopy(load_rubric("assistant-reply"))
+    changed.questions["score.helpfulness"]["instructions"] += " Changed without a version bump."
+    assert changed.version == original.rubric_version
+    assert rubric_content_hash(changed) != original.rubric_hash
+    monkeypatch.setattr("judge_jev.funnel.load_rubric", lambda _rubric_id: changed)
+
+    with pytest.raises(JudgeJevError, match="rubric_hash"):
+        replay_judgment(saved)
+    replayed = replay_judgment(saved, allow_version_drift=True)
+    assert replayed.rubric_hash == rubric_content_hash(changed)
+    assert replayed.source_rubric_version == original.rubric_version
+    assert replayed.source_rubric_hash == original.rubric_hash
+    assert "rubric_hash" in replayed.routing_reason
+
+
+def test_legacy_replay_without_content_hash_is_readable_with_limitation():
+    saved = run_judgment(
+        "assistant-reply", FIXTURES / "assistant-reply-pass.json", mock=True
+    ).to_dict()
+    saved.pop("rubric_hash")
+    saved.pop("source_rubric_hash")
+    replayed = replay_judgment(saved)
+    assert replayed.source_rubric_hash is None
+    assert "content drift cannot be checked" in replayed.routing_reason
 
 
 # --- funnel over fixtures ------------------------------------------------------

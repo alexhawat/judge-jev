@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 MARKER = Path("shared") / "rubrics"
+PACKAGE_ASSETS = Path(__file__).resolve().parent / "assets"
 
 
 def _search_up(start: Path) -> Path | None:
@@ -34,11 +35,36 @@ def repo_root() -> Path:
 
 
 def rubrics_dir() -> Path:
-    return repo_root() / "shared" / "rubrics"
+    if os.environ.get("JUDGE_JEV_ROOT"):
+        return repo_root() / "shared" / "rubrics"
+    for start in (Path(__file__).resolve(), Path.cwd().resolve()):
+        found = _search_up(start)
+        if found is not None:
+            return found / "shared" / "rubrics"
+    packaged = PACKAGE_ASSETS / "rubrics"
+    return packaged if packaged.is_dir() else repo_root() / "shared" / "rubrics"
 
 
 def schemas_dir() -> Path:
-    return repo_root() / "shared" / "schemas"
+    if os.environ.get("JUDGE_JEV_ROOT"):
+        return repo_root() / "shared" / "schemas"
+    for start in (Path(__file__).resolve(), Path.cwd().resolve()):
+        found = _search_up(start)
+        if found is not None:
+            return found / "shared" / "schemas"
+    packaged = PACKAGE_ASSETS / "schemas"
+    return packaged if packaged.is_dir() else repo_root() / "shared" / "schemas"
+
+
+def tuning_dir() -> Path:
+    if os.environ.get("JUDGE_JEV_ROOT"):
+        return repo_root() / "shared" / "tuning"
+    for start in (Path(__file__).resolve(), Path.cwd().resolve()):
+        found = _search_up(start)
+        if found is not None:
+            return found / "shared" / "tuning"
+    packaged = PACKAGE_ASSETS / "tuning"
+    return packaged if packaged.is_dir() else repo_root() / "shared" / "tuning"
 
 
 def runtime_config_path() -> Path:

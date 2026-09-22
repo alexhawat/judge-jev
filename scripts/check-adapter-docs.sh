@@ -48,6 +48,8 @@ def last_paragraph(chunk: str) -> str:
 violations = []
 for path in files:
     text = path.read_text()
+    if path.parent.name != "claude-code" and "manual / experimental" not in text.splitlines()[0].lower():
+        violations.append((path.relative_to(root), 1, "non-primary adapter is not labeled manual / experimental"))
     fences = list(FENCE.finditer(text))
     for i, fence in enumerate(fences):
         code = fence.group(0)
@@ -69,12 +71,11 @@ for path in files:
             violations.append((path.relative_to(root), lineno, line.strip()))
 
 if violations:
-    print("adapter docs teach --mock as the default in a primary example:", file=sys.stderr)
+    print("adapter documentation contract violations:", file=sys.stderr)
     for path, lineno, line in violations:
         print(f"  {path}:{lineno}: {line}", file=sys.stderr)
     print(file=sys.stderr)
-    print('Fix: drop --mock from the primary example, or say "smoke-test" in the', file=sys.stderr)
-    print("paragraph immediately BEFORE the code block if it belongs there.", file=sys.stderr)
+    print("Fix the reported label or mock-example contract.", file=sys.stderr)
     sys.exit(1)
 
 print(f"ok: no primary example in {len(files)} adapter docs defaults to --mock")

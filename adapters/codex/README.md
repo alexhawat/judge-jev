@@ -1,6 +1,7 @@
-# Codex adapter
+# Codex adapter (manual / experimental)
 
-Codex-style agents should treat `AGENTS.md` as setup instructions and shell out to the CLI.
+This is a manual recipe, not a tested host integration or an enforcement gate.
+Codex-style agents can treat `AGENTS.md` as setup instructions and invoke the CLI.
 
 ## Command contract
 

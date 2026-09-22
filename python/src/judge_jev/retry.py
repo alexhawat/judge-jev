@@ -14,10 +14,12 @@ first place. The values are typesafe-sdk 0.7.0's own
 here — it just makes the Rust side something that can be checked against a written
 contract rather than against a guess.
 
-`timeout` is the SDK's *total* retry budget per call, covering the initial attempt
-and every backoff delay; `PER_OPERATION_TIMEOUT` is its per-operation default,
-passed explicitly because the Rust runtime used to set 30s for a whole request
-while its comment claimed to be keeping the two close.
+`timeout` is documented by the SDK as its total retry budget. Its Tenacity stop
+policy checks elapsed time before another retry and refuses a delay that would
+reach the budget. It does not preempt an in-flight SDK operation or shorten that
+operation to the remaining budget. `PER_OPERATION_TIMEOUT` is the SDK's separate
+per-operation default. Rust can enforce a stricter monotonic wall-clock deadline;
+the distinction is documented instead of claiming guarantees the SDK does not make.
 """
 
 from __future__ import annotations

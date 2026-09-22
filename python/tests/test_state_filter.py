@@ -105,6 +105,16 @@ def test_no_paths_means_everything_but_the_mock_block():
     assert set(filter_state(TRAJECTORY, [])) == {"goal", "steps", "final_output"}
 
 
+def test_json_null_is_selected_and_satisfies_required_path():
+    assert filter_state({"a": None}, [StatePath("a", required=True)]) == {"a": None}
+
+
+@pytest.mark.parametrize("declared", [paths("a", "a[].x"), paths("a[].x", "a")])
+def test_parent_selection_wins_over_descendant_regardless_of_order(declared):
+    raw = {"a": [1, {"x": 2, "keep": 3}, None]}
+    assert filter_state(raw, declared) == raw
+
+
 @pytest.mark.parametrize("path", ["", "a..b", ".a", "a.", "a[b]", "a[][]", "a]b"])
 def test_malformed_paths_are_rejected(path):
     with pytest.raises(StatePathError):

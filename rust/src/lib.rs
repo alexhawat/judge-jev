@@ -1,5 +1,9 @@
+pub mod answers;
+pub mod backend;
 pub mod budget;
 pub mod canonical;
+pub mod capture;
+pub mod embedded_assets;
 pub mod funnel;
 pub mod gates;
 pub mod models;

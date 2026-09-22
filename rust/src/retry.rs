@@ -135,10 +135,36 @@ impl RetryPolicy {
     /// attempt number.
     pub fn run<T>(&self, mut attempt: impl FnMut(u64, u32) -> Outcome<T>) -> Result<T> {
         let started = Instant::now();
+        self.run_with(
+            || started.elapsed().as_secs_f64(),
+            |delay| std::thread::sleep(Duration::from_secs_f64(delay)),
+            jitter_fraction(),
+            &mut attempt,
+        )
+    }
+
+    fn run_with<T>(
+        &self,
+        mut elapsed: impl FnMut() -> f64,
+        mut sleep: impl FnMut(f64),
+        jitter: f64,
+        mut attempt: impl FnMut(u64, u32) -> Outcome<T>,
+    ) -> Result<T> {
         let mut last: Option<anyhow::Error> = None;
 
         for number in 1..=(self.max_retries + 1) {
-            match attempt(self.per_operation_timeout_secs, number) {
+            let timeout = match self.total_timeout {
+                Some(budget) => {
+                    let remaining = budget - elapsed();
+                    if remaining < 1.0 {
+                        break;
+                    }
+                    self.per_operation_timeout_secs
+                        .min(remaining.floor() as u64)
+                }
+                None => self.per_operation_timeout_secs,
+            };
+            match attempt(timeout, number) {
                 Outcome::Done(value) => return Ok(value),
                 Outcome::Fatal(error) => return Err(error),
                 Outcome::Retry { error, after } => {
@@ -148,12 +174,12 @@ impl RetryPolicy {
                     }
                     let delay = match (self.respect_retry_after, after) {
                         (true, Some(seconds)) => seconds,
-                        _ => self.backoff(number, jitter_fraction()),
+                        _ => self.backoff(number, jitter),
                     };
                     // The SDK stops before a delay that would reach the budget,
                     // re-raising the last error rather than sleeping past it.
                     if let Some(budget) = self.total_timeout {
-                        if started.elapsed().as_secs_f64() + delay >= budget {
+                        if elapsed() + delay >= budget {
                             break;
                         }
                     }
@@ -163,7 +189,7 @@ impl RetryPolicy {
                         last.as_ref().expect("just set"),
                         delay
                     );
-                    std::thread::sleep(Duration::from_secs_f64(delay));
+                    sleep(delay);
                 }
             }
         }
@@ -325,27 +351,34 @@ mod tests {
 
     #[test]
     fn the_total_budget_stops_before_a_delay_that_would_exceed_it() {
-        // A budget smaller than the first backoff: one attempt, then give up
-        // rather than sleep past it.
+        // Use the injected monotonic clock and sleeper: no wall-clock sleeps and
+        // the transport observes the timeout capped to the remaining budget.
         let policy = RetryPolicy {
-            total_timeout: Some(0.1),
+            total_timeout: Some(3.2),
+            per_operation_timeout_secs: 10,
             ..RetryPolicy::default()
         };
+        let elapsed = std::cell::Cell::new(0.0);
         let mut attempts = 0;
-        let started = Instant::now();
-        let result: Result<()> = policy.run(|_, _| {
-            attempts += 1;
-            Outcome::Retry {
-                error: anyhow!("503"),
-                after: None,
-            }
-        });
+        let mut timeouts = Vec::new();
+        let result: Result<()> = policy.run_with(
+            || elapsed.get(),
+            |delay| elapsed.set(elapsed.get() + delay),
+            0.0,
+            |timeout, _| {
+                attempts += 1;
+                timeouts.push(timeout);
+                elapsed.set(elapsed.get() + timeout as f64);
+                Outcome::Retry {
+                    error: anyhow!("503"),
+                    after: None,
+                }
+            },
+        );
         assert!(result.is_err());
         assert_eq!(attempts, 1);
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "it slept anyway"
-        );
+        assert_eq!(timeouts, vec![3]);
+        assert!(elapsed.get() <= 3.2);
     }
 
     #[test]

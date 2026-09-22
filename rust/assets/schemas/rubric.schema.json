@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alexhawat/judge-jev/shared/schemas/rubric.schema.json",
+  "title": "Rubric",
+  "$defs": {
+    "statePath": {
+      "type": "string",
+      "description": "Dot-separated segments; each is a key, optionally followed by `[]` to map over a list.",
+      "pattern": "^[^.\\[\\]]+(\\[\\])?(\\.[^.\\[\\]]+(\\[\\])?)*$"
+    }
+  },
+  "type": "object",
+  "required": ["id", "version", "model", "stakes", "confidence_floors", "questions", "routing"],
+  "properties": {
+    "id": { "type": "string" },
+    "version": { "type": "string" },
+    "description": { "type": "string" },
+    "model": { "type": "string" },
+    "stakes": { "type": "string", "enum": ["read_only", "write", "destructive"] },
+    "confidence_floors": {
+      "type": "object",
+      "description": "Floor an automatic pass/fail must clear, per stakes level. The rubric's own stakes must have an entry.",
+      "properties": {
+        "read_only": { "type": "number", "minimum": 0, "maximum": 1 },
+        "write": { "type": "number", "minimum": 0, "maximum": 1 },
+        "destructive": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "state_filter": {
+      "type": "array",
+      "description": "Paths to include when building TypeSafe state. `a` selects a top-level key, `a.b` a nested key, `a[]` maps over a list and `a[].b` projects a field from each of its elements; the filtered state keeps the original shape, so a path written in `instructions` still resolves. An entry is a path, or a mapping that also marks it required: a path that does not resolve is dropped with a warning unless `required` is true, which fails the run instead. In an inline mapping the path must be quoted, since `[` and `]` are YAML flow indicators.",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/statePath" },
+          {
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "$ref": "#/$defs/statePath" },
+              "required": {
+                "type": "boolean",
+                "description": "Fail the run when this path is absent, instead of warning and dropping it."
+              }
+            }
+          }
+        ]
+      }
+    },
+    "questions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "stage"],
+        "properties": {
+          "type": { "type": "string", "enum": ["noul", "choice", "score"] },
+          "stage": { "type": "string", "enum": ["screen", "profile", "locate", "score", "route"] },
+          "instructions": { "type": "string" },
+          "criteria": {}
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "required": ["rules"],
+      "properties": {
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Evaluated in order; first match wins. Conditions within a rule are ANDed and short-circuit on the first false.",
+          "items": {
+            "type": "object",
+            "required": ["verdict"],
+            "properties": {
+              "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
+              "reason": { "type": "string" },
+              "default": { "type": "boolean", "description": "Catch-all. Must be the last rule and carry no conditions." },
+              "all": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["answer", "field", "op", "value"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "answer": { "type": "string", "description": "A question ID declared in this rubric." },
+                    "field": { "type": "string", "enum": ["noul", "score", "confidence", "choice"] },
+                    "op": { "type": "string", "enum": ["<", "<=", ">", ">=", "==", "!="] },
+                    "value": { "type": ["number", "string"] }
+                  }
+                }
+              }
+            },
+            "oneOf": [
+              { "required": ["all"] },
+              { "required": ["default"] }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

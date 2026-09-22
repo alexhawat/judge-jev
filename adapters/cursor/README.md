@@ -1,30 +1,25 @@
-# Cursor adapter
+# Cursor adapter (manual / experimental)
 
-Cursor agents invoke the shared CLI via `scripts/judge-jev`.
-
-## Install
-
-1. Run `bash scripts/setup.sh` (or `pwsh scripts/setup.ps1` on Windows).
-2. Add `skills/judge-jev` to your Cursor skills path or symlink.
-3. Optional: merge `hooks/cursor/post-tool-use.json` into Cursor hook config when
-   `JUDGE_JEV_AUTO=1`. Set `JUDGE_JEV_INPUT` to the trajectory JSON itself, not a
-   path -- the hook pipes it to `--input -`, so there is no temp file to manage.
-
-## Usage
+Cursor is not the primary tested integration. Use the shared CLI manually:
 
 ```bash
-export JUDGE_JEV_ROOT=/path/to/judge-jev
-./scripts/judge-jev run --rubric assistant-reply --input fixtures/assistant-reply-pass.json
+./scripts/judge-jev run --rubric assistant-reply --input /absolute/path/to/input.json
 ```
 
-Requires `TYPESAFE_API_KEY`. To smoke-test the wiring without a key, add `--mock`;
-mock answers are canned and must never be reported as a real judgment.
+This requires `TYPESAFE_API_KEY`. Add `--mock` only for a clearly labeled offline
+plumbing test; canned mock answers do not measure quality.
 
-Cloud agents should set `JUDGE_JEV_RUNTIME=python` for faster CI-style smoke tests.
+The previous `post-tool-use.json` template has been removed. It ignored Cursor's
+event stdin, repeatedly judged a static environment variable, and described exit
+status 1 as enforcement even though that was not Cursor's contract.
 
-## Windows
+Cursor's official [hooks documentation](https://prod.cursor.com/docs/hooks),
+retrieved 22 September 2026, says command hooks receive JSON on stdin and return
+JSON on stdout. Exit 2 blocks where the event is blockable; other nonzero exits
+fail open by default. The current `stop` event receives only `status` and
+`loop_count` and can return `followup_message`; it does not provide the completed
+trajectory. A future complete adapter therefore needs a tested transcript/event
+capture design rather than a copied Claude Stop command.
 
-```powershell
-$env:JUDGE_JEV_ROOT = "C:\path\to\judge-jev"
-pwsh scripts/judge-jev.ps1 run --rubric assistant-reply --input fixtures/assistant-reply-pass.json
-```
+Project hooks live at `.cursor/hooks.json`; user hooks live at
+`~/.cursor/hooks.json`. Do not treat this manual recipe as an installed safety gate.

@@ -1,6 +1,8 @@
 use anyhow::Result;
-use judge_jev::funnel::{read_input_text, replay_judgment, run_judgment};
-use judge_jev::models::{JudgmentResult, SavedJudgment, RUNTIME_NAME, RUNTIME_VERSION};
+use judge_jev::backend::resolve_backend;
+use judge_jev::capture::prune;
+use judge_jev::funnel::{read_input_text, replay_judgment, run_judgment_configured};
+use judge_jev::models::{Answer, JudgmentResult, SavedJudgment, RUNTIME_NAME, RUNTIME_VERSION};
 use judge_jev::rubric::{list_rubric_ids, show_rubric};
 use judge_jev::{exit_for_verdict, setup, EXIT_ERROR, EXIT_OK, EXIT_USAGE};
 use std::collections::{HashMap, HashSet};
@@ -9,12 +11,43 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage: judge-jev <setup|run|rubric|replay> ...
+const USAGE: &str = "usage: judge-jev <setup|run|rubric|replay|capture> ...
   setup
-  run    --rubric <id> --input <file.json|-> [--mock] [--tracing] [--tracing-to logfire]
-  replay --input <result.json|-> [--allow-version-drift]
+  run    --rubric <id> --input <file.json|-> [--backend typesafe|cloudflare|replay] [--replay-input <result.json>] [--mock] [--format json|human] [--tracing] [--tracing-to logfire]
+  replay --input <result.json|-> [--allow-version-drift] [--format json|human]
+  capture prune --dir <capture-dir> --older-than <duration> [--apply]
   rubric list | show --id <id>
   --version";
+
+const HELP: &str = "judge-jev — JSON judgment engine
+
+Commands:
+  setup                         Choose and install a runtime
+  run --rubric ID --input FILE  Run one batched judgment (FILE may be -)
+  replay --input FILE           Re-route a saved result without an API call
+  rubric list                   List available rubric IDs
+  rubric show --id ID           Inspect a rubric
+
+Run and replay emit one JSON value on stdout. Verdict exit codes are 0 pass,
+1 fail, 2 review, 3 escalate, 4 skip; 10 means no judgment and 11 means usage.
+Interactive reply, trajectory, doctor, explain, and history commands are provided
+by the recommended Python frontend through scripts/judge-jev.";
+
+fn command_help(command: &str, subcommand: Option<&str>) -> Option<&'static str> {
+    match (command, subcommand) {
+        ("setup", _) => Some("usage: judge-jev setup\n\nChoose and install the Python or Rust runtime."),
+        ("run", _) => Some(
+            "usage: judge-jev run --rubric <id> --input <file.json|-> [--mock] [--format json|human] [--tracing] [--tracing-to logfire]\n\nInput is one JSON object matching the rubric state_filter; - reads stdin.\nExample: judge-jev run --rubric assistant-reply --input reply.json --mock\nJSON is the default. --mock is canned and never falls back live. Exits: 0-4 verdict, 10 error, 11 usage.",
+        ),
+        ("replay", _) => Some(
+            "usage: judge-jev replay --input <result.json|-> [--allow-version-drift] [--format json|human]\n\nInput is a prior JudgmentResult. No API call is made.\nExample: judge-jev replay --input saved.json --format human\nContent drift requires the explicit override. Exits: 0-4 verdict, 10 error, 11 usage.",
+        ),
+        ("rubric", Some("list")) => Some("usage: judge-jev rubric list"),
+        ("rubric", Some("show")) => Some("usage: judge-jev rubric show --id <id>"),
+        ("rubric", _) => Some("usage: judge-jev rubric <list|show> ..."),
+        _ => None,
+    }
+}
 
 fn main() -> ExitCode {
     // Logs go to stderr so stdout carries nothing but the JudgmentResult JSON and
@@ -52,6 +85,24 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
         println!("judge-jev {RUNTIME_VERSION} ({RUNTIME_NAME})");
         return Ok(EXIT_OK);
     }
+    if (command == "--help" || command == "-h") && args.len() == 1 {
+        println!("{HELP}");
+        return Ok(EXIT_OK);
+    }
+    if args
+        .iter()
+        .skip(1)
+        .any(|arg| arg == "--help" || arg == "-h")
+    {
+        let subcommand = args
+            .get(1)
+            .map(String::as_str)
+            .filter(|arg| !arg.starts_with('-'));
+        if let Some(help) = command_help(&command, subcommand) {
+            println!("{help}");
+            return Ok(EXIT_OK);
+        }
+    }
 
     match command.as_str() {
         "setup" => {
@@ -64,7 +115,16 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
         "run" => {
             let flags = match Flags::parse(
                 &args[1..],
-                &["--rubric", "--input", "--tracing-to"],
+                &[
+                    "--rubric",
+                    "--input",
+                    "--tracing-to",
+                    "--format",
+                    "--backend",
+                    "--replay-input",
+                    "--capture",
+                    "--redact",
+                ],
                 &["--mock", "--tracing"],
             ) {
                 Ok(flags) => flags,
@@ -73,6 +133,10 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
             let (rubric, input) = match (flags.require("--rubric"), flags.require("--input")) {
                 (Ok(rubric), Ok(input)) => (rubric, input),
                 (Err(msg), _) | (_, Err(msg)) => return Ok(usage_error(&msg)),
+            };
+            let format = match output_format(flags.values.get("--format")) {
+                Ok(format) => format,
+                Err(message) => return Ok(usage_error(&message)),
             };
             // Match Python's sink validation, but tracing is a no-op in Rust v1.
             // Like Python, --tracing-to alone does not enable tracing.
@@ -89,12 +153,38 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
                     anyhow::bail!("unsupported tracing sink '{sink}'; only 'logfire' is available");
                 }
             }
-            let result = run_judgment(&rubric, &PathBuf::from(input), flags.is_set("--mock"))?;
-            print_result(&result)?;
+            let backend = match resolve_backend(
+                flags.values.get("--backend").map(String::as_str),
+                flags.is_set("--mock"),
+            ) {
+                Ok(value) => value,
+                Err(message) => return Ok(usage_error(&message)),
+            };
+            let replay_input = flags.values.get("--replay-input").map(PathBuf::from);
+            let capture_value = flags
+                .values
+                .get("--capture")
+                .cloned()
+                .or_else(|| std::env::var("JUDGE_JEV_CAPTURE").ok());
+            let capture_dir = capture_value.as_ref().map(PathBuf::from);
+            let result = run_judgment_configured(
+                &rubric,
+                &PathBuf::from(input),
+                flags.is_set("--mock"),
+                &backend,
+                replay_input.as_deref(),
+                capture_dir.as_deref(),
+                flags.get_all("--redact"),
+            )?;
+            print_result(&result, format, false)?;
             Ok(exit_for_verdict(&result.verdict))
         }
         "replay" => {
-            let flags = match Flags::parse(&args[1..], &["--input"], &["--allow-version-drift"]) {
+            let flags = match Flags::parse(
+                &args[1..],
+                &["--input", "--format"],
+                &["--allow-version-drift"],
+            ) {
                 Ok(flags) => flags,
                 Err(msg) => return Ok(usage_error(&msg)),
             };
@@ -102,13 +192,43 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
                 Ok(input) => input,
                 Err(msg) => return Ok(usage_error(&msg)),
             };
+            let format = match output_format(flags.values.get("--format")) {
+                Ok(format) => format,
+                Err(message) => return Ok(usage_error(&message)),
+            };
             let text = read_input_text(&PathBuf::from(&input))?;
             let saved: SavedJudgment = serde_json::from_str(&text)
                 .map_err(|e| anyhow::anyhow!("input {input} is not a saved judgment: {e}"))?;
             let result = replay_judgment(&saved, flags.is_set("--allow-version-drift"))?;
-            print_result(&result)?;
+            print_result(&result, format, true)?;
             Ok(exit_for_verdict(&result.verdict))
         }
+        "capture" => match args.get(1).map(String::as_str) {
+            Some("prune") => {
+                let flags = match Flags::parse(&args[2..], &["--dir", "--older-than"], &["--apply"])
+                {
+                    Ok(flags) => flags,
+                    Err(msg) => return Ok(usage_error(&msg)),
+                };
+                let (directory, older_than) =
+                    match (flags.require("--dir"), flags.require("--older-than")) {
+                        (Ok(directory), Ok(older_than)) => (directory, older_than),
+                        (Err(msg), _) | (_, Err(msg)) => return Ok(usage_error(&msg)),
+                    };
+                let duration = parse_duration(&older_than)?;
+                let apply = flags.is_set("--apply");
+                let paths = prune(&PathBuf::from(directory), duration, apply)?;
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "dry_run": !apply,
+                        "files": paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                    }))?
+                );
+                Ok(EXIT_OK)
+            }
+            _ => Ok(usage_error("capture needs subcommand: prune")),
+        },
         "rubric" => match args.get(1).map(String::as_str) {
             Some("list") => {
                 if let Err(msg) = Flags::parse(&args[2..], &[], &[]) {
@@ -158,6 +278,7 @@ fn usage_error(message: &str) -> i32 {
 /// is now an error.
 struct Flags {
     values: HashMap<String, String>,
+    multi: HashMap<String, Vec<String>>,
     set: HashSet<String>,
 }
 
@@ -165,17 +286,28 @@ impl Flags {
     fn parse(args: &[String], value_flags: &[&str], bool_flags: &[&str]) -> Result<Self, String> {
         let mut values: HashMap<String, String> = HashMap::new();
         let mut set: HashSet<String> = HashSet::new();
+        let mut multi: HashMap<String, Vec<String>> = HashMap::new();
         let mut i = 0;
         while i < args.len() {
             let arg = args[i].as_str();
             if value_flags.contains(&arg) {
-                if values.contains_key(arg) {
+                if values.contains_key(arg) && arg != "--redact" {
                     return Err(format!("{arg} given more than once"));
                 }
                 // `-` is a value (stdin), not the start of another flag.
                 match args.get(i + 1) {
                     Some(value) if value == "-" || !value.starts_with('-') => {
-                        values.insert(arg.to_string(), value.clone());
+                        if arg == "--redact" {
+                            multi
+                                .entry(arg.to_string())
+                                .or_default()
+                                .push(value.clone());
+                            values
+                                .entry(arg.to_string())
+                                .or_insert_with(|| value.clone());
+                        } else {
+                            values.insert(arg.to_string(), value.clone());
+                        }
                     }
                     _ => return Err(format!("{arg} needs a value")),
                 }
@@ -194,7 +326,7 @@ impl Flags {
             }
             return Err(format!("unexpected argument: {arg}"));
         }
-        Ok(Flags { values, set })
+        Ok(Flags { values, multi, set })
     }
 
     fn require(&self, name: &str) -> Result<String, String> {
@@ -207,9 +339,119 @@ impl Flags {
     fn is_set(&self, name: &str) -> bool {
         self.set.contains(name)
     }
+
+    fn get_all(&self, name: &str) -> &[String] {
+        self.multi.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
 }
 
-fn print_result(result: &JudgmentResult) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(result)?);
+fn parse_duration(text: &str) -> Result<std::time::Duration> {
+    let (number, multiplier) = match text.chars().last() {
+        Some('s') | Some('S') => (&text[..text.len() - 1], 1.0),
+        Some('m') | Some('M') => (&text[..text.len() - 1], 60.0),
+        Some('h') | Some('H') => (&text[..text.len() - 1], 3600.0),
+        Some('d') | Some('D') => (&text[..text.len() - 1], 86400.0),
+        _ => (text, 1.0),
+    };
+    let value: f64 = number
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--older-than must be seconds or a duration such as 30d"))?;
+    if !value.is_finite() || value < 0.0 {
+        anyhow::bail!("--older-than must be non-negative");
+    }
+    Ok(std::time::Duration::from_secs_f64(value * multiplier))
+}
+
+#[derive(Clone, Copy)]
+enum OutputFormat {
+    Json,
+    Human,
+}
+
+fn output_format(value: Option<&String>) -> Result<OutputFormat, String> {
+    match value.map(String::as_str).unwrap_or("json") {
+        "json" => Ok(OutputFormat::Json),
+        "human" => Ok(OutputFormat::Human),
+        other => Err(format!("--format must be json or human, got '{other}'")),
+    }
+}
+
+fn print_result(result: &JudgmentResult, format: OutputFormat, replay: bool) -> Result<()> {
+    if matches!(format, OutputFormat::Json) {
+        println!("{}", serde_json::to_string_pretty(result)?);
+        return Ok(());
+    }
+    let heading = if result.mock && !replay {
+        format!("DEMO — CANNED ANSWERS — {}", result.verdict.to_uppercase())
+    } else {
+        result.verdict.to_uppercase()
+    };
+    println!("{heading} — {}\n", result.routing_reason);
+    for answer_id in &result.deciding_answers {
+        let Some(answer) = result.answers.get(answer_id) else {
+            continue;
+        };
+        let label = answer_id
+            .rsplit('.')
+            .next()
+            .unwrap_or(answer_id)
+            .replace('_', " ");
+        match answer {
+            Answer::Noul { noul } => println!("{label:<28} yes-probability {noul:.2}"),
+            Answer::Choice {
+                choice, confidence, ..
+            } => println!("{label:<28} {choice}  confidence {confidence:.2}"),
+            Answer::Score {
+                score,
+                confidence,
+                legend,
+                ..
+            } => {
+                let maximum = legend
+                    .as_ref()
+                    .and_then(|items| {
+                        items
+                            .keys()
+                            .filter_map(|key| key.parse::<usize>().ok())
+                            .max()
+                    })
+                    .map_or_else(|| "?".into(), |value| value.to_string());
+                println!("{label:<28} {score:.2} / {maximum}  confidence {confidence:.2}");
+            }
+        }
+    }
+    println!(
+        "Decision confidence           {:.2} (required {:.2})",
+        result.confidence, result.confidence_floor
+    );
+    if replay {
+        println!("Mode                          offline replay; no API call was made");
+        println!(
+            "Original evidence             {}",
+            if result.mock {
+                "canned mock answers"
+            } else {
+                "recorded API answers"
+            }
+        );
+    } else if result.mock {
+        println!("Mode                          offline canned demo");
+        println!(
+            "Limitation                    canned answers prove mechanics, not judgment quality"
+        );
+    } else {
+        println!("Mode                          live API judgment");
+    }
+    if result
+        .deterministic_gates
+        .iter()
+        .any(|gate| gate.gate_id == "injection_heuristic" && gate.outcome == "fail")
+    {
+        println!("Deterministic override        injection heuristic enforced escalation");
+        println!("Override confidence           not a calibrated model probability");
+    }
+    if result.mock && !replay {
+        println!("\nNext: Try a real judgment: set TYPESAFE_API_KEY and run without --mock.");
+    }
     Ok(())
 }

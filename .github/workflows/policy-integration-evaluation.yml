@@ -1,0 +1,56 @@
+name: Policy, integration, and evaluation
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'cursor/**', 'codex/**']
+
+jobs:
+  workstream-c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-path: python/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.98
+      - name: Install Python test dependencies
+        run: cd python && uv sync --locked --dev
+      - name: Policy, Claude integration, and evaluator tests
+        run: >-
+          cd python && uv run pytest -q
+          tests/test_policy_boundaries.py
+          tests/test_claude_code_integration.py
+          tests/test_evaluation_tool.py
+          tests/test_launchers_packaging.py
+      - name: Rust policy boundaries
+        run: cd rust && cargo test --test policy_boundaries --quiet
+      - name: Reproduce synthetic smoke report and enforce floors
+        run: >-
+          cd python && uv run python ../evaluation/evaluate.py
+          --dataset ../evaluation/datasets/smoke.jsonl
+          --results ../evaluation/fixtures/smoke-saved-results.jsonl
+          --output ../evaluation/reports/smoke-report.json
+          --ci-min-agreement 1.0
+          --ci-min-macro-f1 1.0
+          --ci-max-false-pass-rate 0.0
+
+  windows-launchers:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-path: python/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python test dependencies
+        shell: pwsh
+        run: cd python; uv sync --locked --dev
+      - name: PowerShell launcher and atomic setup behavior
+        shell: pwsh
+        run: cd python; uv run pytest -q tests/test_powershell_launchers.py tests/test_guided_cli.py

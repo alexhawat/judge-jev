@@ -10,29 +10,52 @@ if [[ -z "$RUNTIME" && -t 0 ]]; then
   echo "Select judge-jev runtime:"
   echo "  1) python"
   echo "  2) rust"
-  read -r -p "Enter 1 or 2 [1]: " choice
-  RUNTIME=$([[ "${choice:-1}" == "2" ]] && echo rust || echo python)
+  choice=""
+  read -r -p "Enter 1 or 2 [1]: " choice || true
+  case "${choice:-1}" in 1) RUNTIME=python ;; 2) RUNTIME=rust ;; *) echo "Choose 1 or 2." >&2; exit 11 ;; esac
 elif [[ -z "$RUNTIME" ]]; then
   RUNTIME=python
 fi
 
-mkdir -p "$ROOT/.judge-jev"
-echo "$RUNTIME" > "$ROOT/.judge-jev/runtime"
-
 case "$RUNTIME" in
   python)
-    command -v uv >/dev/null || { echo "uv required; see https://docs.astral.sh/uv/"; exit 1; }
-    (cd "$ROOT/python" && uv sync --dev)
+    command -v uv >/dev/null || { echo "uv required; see https://docs.astral.sh/uv/"; exit 10; }
+    set +e
+    (cd "$ROOT/python" && uv sync --locked --dev)
+    install_code=$?
+    set -e
+    [[ "$install_code" == 0 ]] || exit 10
+    set +e
+    "$ROOT/python/.venv/bin/judge-jev" --version >/dev/null
+    smoke_code=$?
+    set -e
+    [[ "$smoke_code" == 0 ]] || exit 10
     ;;
   rust)
-    command -v cargo >/dev/null || { echo "cargo required; install Rust toolchain"; exit 1; }
+    command -v cargo >/dev/null || { echo "cargo required; install Rust toolchain"; exit 10; }
+    set +e
     (cd "$ROOT/rust" && cargo build --release)
+    install_code=$?
+    set -e
+    [[ "$install_code" == 0 ]] || exit 10
+    set +e
+    "$ROOT/rust/target/release/judge-jev" --version >/dev/null
+    smoke_code=$?
+    set -e
+    [[ "$smoke_code" == 0 ]] || exit 10
     ;;
   *)
     echo "Unknown runtime: $RUNTIME (use python or rust)" >&2
-    exit 1
+    exit 11
     ;;
 esac
+
+mkdir -p "$ROOT/.judge-jev" || exit 10
+tmp="$(mktemp "$ROOT/.judge-jev/runtime.tmp.XXXXXX")" || exit 10
+trap 'rm -f "$tmp"' EXIT
+printf '%s\n' "$RUNTIME" > "$tmp" || exit 10
+mv -f "$tmp" "$ROOT/.judge-jev/runtime" || exit 10
+trap - EXIT
 
 echo "Configured runtime=$RUNTIME at $ROOT/.judge-jev/runtime"
 echo "Export TYPESAFE_API_KEY for live mode, or pass --mock to judge-jev run."

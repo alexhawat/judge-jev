@@ -1,6 +1,7 @@
-# OpenCode adapter
+# OpenCode adapter (manual / experimental)
 
-OpenCode can call judge-jev as an external command step.
+This is an unverified manual pattern, not a tested OpenCode host contract or
+enforcement gate. OpenCode can call judge-jev as an external command step.
 
 ## Template
 

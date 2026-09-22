@@ -1,6 +1,7 @@
-# Hermes adapter
+# Hermes adapter (manual / experimental)
 
-Hermes agents: install the skill at `skills/judge-jev/SKILL.md` and delegate judging to the CLI.
+This is a manual recipe, not a tested Hermes integration or enforcement gate.
+Hermes agents can install `skills/judge-jev/SKILL.md` and delegate judging to the CLI.
 
 ## Example tool manifest
 

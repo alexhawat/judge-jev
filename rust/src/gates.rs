@@ -56,11 +56,17 @@ fn compact_json_array(items: &[String]) -> String {
     format!("[{inner}]")
 }
 
-fn sha256_hex(data: &[u8]) -> String {
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     sha256(data)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Stable content hash for provenance payloads. Plan 002 replaces callers with
+/// the rubric loader's authoritative hash after the stacked rebase.
+pub fn sha256_prefixed(data: &[u8]) -> String {
+    format!("sha256:{}", sha256_hex(data))
 }
 
 fn sha256(data: &[u8]) -> [u8; 32] {

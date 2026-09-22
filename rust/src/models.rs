@@ -84,6 +84,7 @@ pub struct JudgmentResult {
     /// saved answers against whatever the rubric says today and reports the new
     /// verdict as though it were the original judgment.
     pub rubric_version: String,
+    pub rubric_hash: String,
     pub verdict: String,
     pub confidence: f64,
     pub stage: String,
@@ -92,6 +93,12 @@ pub struct JudgmentResult {
     pub answers: HashMap<String, Answer>,
     pub routing_reason: String,
     pub mock: bool,
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    #[serde(default)]
+    pub requested_model: Option<String>,
+    #[serde(default = "default_provenance")]
+    pub backend_provenance: String,
     /// Answer IDs the matched rule read. These, and only these, determine `confidence`.
     #[serde(default)]
     pub deciding_answers: Vec<String>,
@@ -100,6 +107,10 @@ pub struct JudgmentResult {
     pub confidence_floor: f64,
     /// Emitted even when absent, for the same reason as `Usage`'s fields.
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub source_rubric_version: Option<String>,
+    #[serde(default)]
+    pub source_rubric_hash: Option<String>,
     #[serde(default)]
     pub runtime: Runtime,
     #[serde(default)]
@@ -118,15 +129,25 @@ pub struct SavedJudgment {
     /// as drift: a result that cannot say what judged it cannot be re-derived.
     #[serde(default)]
     pub rubric_version: Option<String>,
+    #[serde(default)]
+    pub rubric_hash: Option<String>,
     pub answers: HashMap<String, Answer>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub requested_model: Option<String>,
+    #[serde(default)]
+    pub backend: Option<String>,
     #[serde(default)]
     pub usage: Usage,
     #[serde(default)]
     pub mock: bool,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub source_rubric_version: Option<String>,
+    #[serde(default)]
+    pub source_rubric_hash: Option<String>,
     #[serde(default)]
     pub state_projection: StateProjection,
     #[serde(default)]
@@ -139,18 +160,31 @@ impl JudgmentResult {
         SavedJudgment {
             rubric_id: self.rubric_id.clone(),
             rubric_version: Some(self.rubric_version.clone()),
+            rubric_hash: Some(self.rubric_hash.clone()),
             answers: self.answers.clone(),
             model: Some(self.model.clone()),
+            requested_model: self.requested_model.clone(),
+            backend: Some(self.backend.clone()),
             usage: self.usage.clone(),
             mock: self.mock,
             request_id: self.request_id.clone(),
+            source_rubric_version: self.source_rubric_version.clone(),
+            source_rubric_hash: self.source_rubric_hash.clone(),
             state_projection: self.state_projection.clone(),
             deterministic_gates: self.deterministic_gates.clone(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn default_backend() -> String {
+    "typesafe".into()
+}
+
+fn default_provenance() -> String {
+    "live_model".into()
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum Answer {
     #[serde(rename = "noul")]
@@ -171,6 +205,76 @@ pub enum Answer {
         legend: Option<HashMap<String, serde_json::Value>>,
         probabilities: HashMap<String, f64>,
     },
+}
+
+impl<'de> Deserialize<'de> for Answer {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| D::Error::custom("answer must be an object"))?;
+        let kind = object
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| D::Error::custom("answer.type must be a string"))?;
+        let number = |field: &str| {
+            object
+                .get(field)
+                .and_then(serde_json::Value::as_f64)
+                .ok_or_else(|| D::Error::custom(format!("answer.{field} must be a number")))
+        };
+        let probabilities = || -> Result<HashMap<String, f64>, D::Error> {
+            object
+                .get("probabilities")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| D::Error::custom("answer.probabilities must be an object"))?
+                .iter()
+                .map(|(key, value)| {
+                    value
+                        .as_f64()
+                        .map(|number| (key.clone(), number))
+                        .ok_or_else(|| D::Error::custom("answer probability must be a number"))
+                })
+                .collect()
+        };
+        match kind {
+            "noul" => Ok(Answer::Noul {
+                noul: number("noul")?,
+            }),
+            "choice" => Ok(Answer::Choice {
+                choice: object
+                    .get("choice")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| D::Error::custom("answer.choice must be a string"))?
+                    .to_string(),
+                confidence: number("confidence")?,
+                probabilities: probabilities()?,
+            }),
+            "score" => {
+                let legend = object
+                    .get("legend")
+                    .map(|raw| {
+                        raw.as_object()
+                            .ok_or_else(|| D::Error::custom("answer.legend must be an object"))
+                            .map(|mapping| {
+                                mapping
+                                    .iter()
+                                    .map(|(key, value)| (key.clone(), value.clone()))
+                                    .collect()
+                            })
+                    })
+                    .transpose()?;
+                Ok(Answer::Score {
+                    score: number("score")?,
+                    confidence: number("confidence")?,
+                    legend,
+                    probabilities: probabilities()?,
+                })
+            }
+            other => Err(D::Error::custom(format!("unknown answer type '{other}'"))),
+        }
+    }
 }
 
 /// A single field read off an answer by a routing condition.
@@ -244,6 +348,16 @@ pub struct StatePath {
     pub required: bool,
 }
 
+impl Serialize for StatePath {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("StatePath", 2)?;
+        state.serialize_field("path", &self.path)?;
+        state.serialize_field("required", &self.required)?;
+        state.end()
+    }
+}
+
 impl<'de> Deserialize<'de> for StatePath {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -274,7 +388,7 @@ impl<'de> Deserialize<'de> for StatePath {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Rubric {
     pub id: String,
     pub version: String,
@@ -304,7 +418,7 @@ impl Rubric {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QuestionSpec {
     #[serde(rename = "type")]
     pub qtype: String,
@@ -315,12 +429,12 @@ pub struct QuestionSpec {
     pub criteria: serde_yaml::Value,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RoutingSpec {
     pub rules: Vec<RoutingRule>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RoutingRule {
     pub verdict: String,
     #[serde(default)]
@@ -346,7 +460,7 @@ impl RoutingRule {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Condition {
     pub answer: String,
     pub field: String,
@@ -354,7 +468,7 @@ pub struct Condition {
     pub value: ConditionValue,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ConditionValue {
     Number(f64),
@@ -365,7 +479,7 @@ impl ConditionValue {
     pub fn as_number(&self) -> Option<f64> {
         match self {
             ConditionValue::Number(n) => Some(*n),
-            ConditionValue::Text(t) => t.parse::<f64>().ok(),
+            ConditionValue::Text(_) => None,
         }
     }
 
