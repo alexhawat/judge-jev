@@ -14,7 +14,7 @@
 ## CLI (both runtimes)
 
 - `judge-jev setup`
-- `judge-jev run --rubric <id> --input <path|-> [--mock]`
+- `judge-jev run --rubric <id> --input <path|-> [--mock] [--tracing] [--tracing-to logfire]`
 - `judge-jev rubric list|show --id <id>`
 - `judge-jev replay --input <judgment-result.json|-> [--allow-version-drift]`
 
@@ -24,7 +24,8 @@ Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
 
 - `shared/rubrics/` — YAML question packs + routing rules (assistant-reply, agent-trajectory)
 - `shared/schemas/` — JSON Schema for JudgmentResult and rubrics
-- `python/` — uv project, loguru, typesafe-sdk client
+- `python/` — uv project, loguru, typesafe-sdk client; optional `[tracing]` extra (Logfire EU)
+- `docs/judgment-contracts.md` — Noul/Score/confidence + result contract
 - `rust/` — cargo crate, tracing, minreq HTTP client (`POST /v1/systemone`)
 - `skills/judge-jev/SKILL.md` — agent skill
 - `agents/` — setup and judge charters
@@ -41,7 +42,11 @@ Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
   separators, `state` sent as that text. Both runtimes must produce identical
   bytes; `scripts/check-parity.sh` asserts it.
 - Confidence floors depend on stakes (read_only ~0.5, destructive ~0.85).
-- Noul 0.5 means uncertain, not “medium”.
+- Noul value = P(proposition yes), not “% grounded”. 0.5 = uncertain, not “medium”.
+- Score confidence ≠ verdict correctness probability.
+- Missing judge answers escalate; never treat as pass.
+- JudgmentResult always carries state_projection + deterministic_gates.
+- TypeSafe/API failure → exit 10, never a scored pass/fail.
 - Arithmetic/threshold enforcement stays in code, not in Jev prompts.
 - Untrusted PR/ticket/user content: fail-closed on injection signals.
 

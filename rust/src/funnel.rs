@@ -1,6 +1,7 @@
 use crate::budget::check_budget;
 use crate::canonical::CanonicalState;
-use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment};
+use crate::gates::{build_state_projection, evaluate_gates, GateContext};
+use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment, StateProjection};
 use crate::paths::repo_root;
 use crate::routing::route_verdict;
 use crate::rubric::load_rubric;
@@ -62,7 +63,9 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
     let raw = load_input(input_path)?;
     // Canonical from here on: every request is built from these exact bytes, and
     // both runtimes build the same ones.
-    let state = CanonicalState::of(filter_state(&raw, &rubric.state_filter)?)?;
+    let filtered = filter_state(&raw, &rubric.state_filter)?;
+    let state = CanonicalState::of(filtered.clone())?;
+    let projection = build_state_projection(&rubric.state_filter, &filtered);
 
     let questions = build_questions(&rubric);
     // Before the request is built: an oversized state is a local failure, not a
@@ -87,8 +90,26 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
             client.system_one(&state, questions, &rubric.model)?;
         (answers, usage, request_id, model)
     };
+    if answers.is_empty() {
+        anyhow::bail!("system_one returned no answers");
+    }
 
     let routed = route_verdict(&rubric, &answers);
+    let floor = rubric
+        .confidence_floors
+        .get(&rubric.stakes)
+        .copied()
+        .unwrap_or(0.0);
+    let gate_outcomes = evaluate_gates(&GateContext {
+        rubric: &rubric,
+        filtered_state: Some(&filtered),
+        answers: Some(&answers),
+        verdict: Some(&routed.verdict),
+        confidence: Some(routed.confidence),
+        confidence_floor: floor,
+        replay: false,
+        budget_ok: true,
+    });
 
     info!(
         verdict = %routed.verdict,
@@ -110,13 +131,11 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
         routing_reason: routed.reason,
         mock: mock_mode,
         deciding_answers: routed.deciding,
-        confidence_floor: rubric
-            .confidence_floors
-            .get(&rubric.stakes)
-            .copied()
-            .unwrap_or(0.0),
+        confidence_floor: floor,
         request_id,
         runtime: Runtime::default(),
+        state_projection: projection,
+        deterministic_gates: gate_outcomes,
     })
 }
 
@@ -164,6 +183,20 @@ pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Resu
         .get(&rubric.stakes)
         .copied()
         .unwrap_or(0.0);
+    let gate_outcomes = if saved.deterministic_gates.is_empty() {
+        evaluate_gates(&GateContext {
+            rubric: &rubric,
+            filtered_state: None,
+            answers: Some(&saved.answers),
+            verdict: Some(&routed.verdict),
+            confidence: Some(routed.confidence),
+            confidence_floor: floor,
+            replay: true,
+            budget_ok: true,
+        })
+    } else {
+        saved.deterministic_gates.clone()
+    };
     Ok(JudgmentResult {
         rubric_id: rubric.id,
         rubric_version: rubric.version.clone(),
@@ -179,6 +212,8 @@ pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Resu
         confidence_floor: floor,
         request_id: saved.request_id.clone(),
         runtime: Runtime::default(),
+        state_projection: saved.state_projection.clone(),
+        deterministic_gates: gate_outcomes,
     })
 }
 

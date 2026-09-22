@@ -164,41 +164,58 @@ class LiveEngine:
         # Retry and timeout are passed explicitly rather than inherited: the Rust
         # runtime has to mirror them, and a default that is written down on one side
         # and assumed on the other is how the two drifted apart.
-        with TypeSafeClient(
-            api_key=api_key,
-            model=model,
-            retry=retry_policy(),
-            timeout=PER_OPERATION_TIMEOUT,
-        ) as client:
-            # The canonical text itself, not the object: `state` is documented as
-            # text, a JSON object, or an array, and sending the text is the only way
-            # the bytes survive two HTTP clients neither runtime owns.
-            response = client.system_one(state=state.text, questions=questions, model=model)
-            usage = Usage(
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
+        try:
+            with TypeSafeClient(
+                api_key=api_key,
+                model=model,
+                retry=retry_policy(),
+                timeout=PER_OPERATION_TIMEOUT,
+            ) as client:
+                # The canonical text itself, not the object: `state` is documented as
+                # text, a JSON object, or an array, and sending the text is the only way
+                # the bytes survive two HTTP clients neither runtime owns.
+                response = client.system_one(state=state.text, questions=questions, model=model)
+        except JudgeJevError:
+            raise
+        except Exception as err:  # noqa: BLE001 - API/timeout/transport must not become a verdict.
+            raise JudgeJevError(f"TypeSafe system_one failed: {err}") from err
+
+        if not getattr(response, "answers", None):
+            raise JudgeJevError("TypeSafe system_one returned no answers")
+        if not isinstance(response.answers, dict):
+            raise JudgeJevError(
+                f"TypeSafe system_one returned invalid answers: expected object, got {type(response.answers).__name__}"
             )
-            # request_id is a property that raises when the API omits the header, so a
-            # missing id must not take the whole judgment down with it.
-            try:
-                request_id = response.request_id
-            except Exception:  # noqa: BLE001 - SDK raises its own error type here.
-                logger.warning("response did not include {}", "x-typesafe-request-id")
-                request_id = None
-            logger.info(
-                "system_one model={} input_tokens={} output_tokens={} request_id={}",
-                response.model,
-                usage.input_tokens,
-                usage.output_tokens,
-                request_id,
-            )
-            # `response.model` is what actually judged, which is not always what we
-            # asked for: the API may resolve an alias or serve a different build. The
-            # Rust runtime has always recorded the answering model; this runtime used
-            # to record the requested one and drop this value after logging it, so the
-            # same judgment was attributed to two different models depending on which
-            # runtime ran it.
-            return normalize_answers(response.answers), usage, request_id, response.model
+
+        usage = Usage(
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+        )
+        # request_id is a property that raises when the API omits the header, so a
+        # missing id must not take the whole judgment down with it.
+        try:
+            request_id = response.request_id
+        except Exception:  # noqa: BLE001 - SDK raises its own error type here.
+            logger.warning("response did not include {}", "x-typesafe-request-id")
+            request_id = None
+        logger.info(
+            "system_one model={} input_tokens={} output_tokens={} request_id={}",
+            response.model,
+            usage.input_tokens,
+            usage.output_tokens,
+            request_id,
+        )
+        # `response.model` is what actually judged, which is not always what we
+        # asked for: the API may resolve an alias or serve a different build. The
+        # Rust runtime has always recorded the answering model; this runtime used
+        # to record the requested one and drop this value after logging it, so the
+        # same judgment was attributed to two different models depending on which
+        # runtime ran it.
+        try:
+            answers = normalize_answers(response.answers)
+        except Exception as err:  # noqa: BLE001 - malformed wire shape is operational failure.
+            raise JudgeJevError(f"TypeSafe system_one returned malformed answers: {err}") from err
+        return answers, usage, request_id, response.model
 
 
 def get_engine(mock: bool, pinned: dict[str, dict[str, Any]] | None = None) -> MockEngine | LiveEngine:

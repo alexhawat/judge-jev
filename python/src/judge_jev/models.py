@@ -66,6 +66,30 @@ class Usage:
         return asdict(self)
 
 
+@dataclass
+class GateOutcome:
+    """One deterministic gate evaluated during the funnel."""
+
+    gate_id: str
+    outcome: str  # pass | fail | skip
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class StateProjection:
+    """Allowlisted paths and the keys that survived filtering."""
+
+    paths: list[str]
+    hash: str
+    projected_keys: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass(frozen=True)
 class Condition:
     """One comparison against a single answer field."""
@@ -113,11 +137,19 @@ class JudgmentResult:
     confidence_floor: float = 0.0
     request_id: str | None = None
     runtime: Runtime = field(default_factory=lambda: Runtime("python", RUNTIME_VERSION))
+    # Paths from the rubric state_filter and a stable hash of that allowlist.
+    state_projection: StateProjection = field(
+        default_factory=lambda: StateProjection([], "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", [])
+    )
+    # Deterministic checks run in code (not Jev). Always present, even when stubbed.
+    deterministic_gates: list[GateOutcome] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["usage"] = self.usage.to_dict()
         data["runtime"] = self.runtime.to_dict()
+        data["state_projection"] = self.state_projection.to_dict()
+        data["deterministic_gates"] = [g.to_dict() for g in self.deterministic_gates]
         return data
 
 

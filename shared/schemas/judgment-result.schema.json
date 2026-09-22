@@ -17,7 +17,9 @@
     "mock",
     "deciding_answers",
     "confidence_floor",
-    "runtime"
+    "runtime",
+    "state_projection",
+    "deterministic_gates"
   ],
   "additionalProperties": false,
   "properties": {
@@ -41,7 +43,7 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1,
-      "description": "Certainty of the answers that produced this verdict: the minimum over deciding_answers. 0 when no rule-bound answer decided it."
+      "description": "Certainty of the answers that produced this verdict: the minimum over deciding_answers. 0 when no rule-bound answer decided it. This is not a probability that the verdict is correct."
     },
     "confidence_floor": {
       "type": "number",
@@ -57,7 +59,43 @@
     "stage": { "type": "string", "enum": ["screen", "profile", "locate", "score", "route"] },
     "model": {
       "type": "string",
-      "description": "The model that answered, as the API reported it — not necessarily the model the rubric asked for, since the API may resolve an alias. Under --mock nothing answers, so it is the requested model."
+      "description": "The model that answered, as the API reported it — not necessarily the model the rubric asked for, since the API may resolve an alias. Under --mock nothing answers, so it is the requested model (jev-1.13.0)."
+    },
+    "state_projection": {
+      "type": "object",
+      "description": "Allowlisted state_filter paths and the top-level keys that survived filtering.",
+      "required": ["paths", "hash", "projected_keys"],
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Sorted path strings from the rubric state_filter."
+        },
+        "hash": {
+          "type": "string",
+          "description": "Stable sha256 hash of the sorted paths list."
+        },
+        "projected_keys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Top-level keys present in the filtered state sent to Jev."
+        }
+      }
+    },
+    "deterministic_gates": {
+      "type": "array",
+      "description": "Outcomes of deterministic checks run in code (not Jev). Always present.",
+      "items": {
+        "type": "object",
+        "required": ["gate_id", "outcome", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "gate_id": { "type": "string" },
+          "outcome": { "type": "string", "enum": ["pass", "fail", "skip"] },
+          "reason": { "type": "string" }
+        }
+      }
     },
     "usage": {
       "type": "object",
