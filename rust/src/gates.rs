@@ -63,6 +63,12 @@ pub(crate) fn sha256_hex(data: &[u8]) -> String {
         .collect()
 }
 
+/// Stable content hash for provenance payloads. Plan 002 replaces callers with
+/// the rubric loader's authoritative hash after the stacked rebase.
+pub fn sha256_prefixed(data: &[u8]) -> String {
+    format!("sha256:{}", sha256_hex(data))
+}
+
 fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,

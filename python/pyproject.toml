@@ -14,6 +14,9 @@ dependencies = [
 tracing = [
     "logfire>=2.9.0",
 ]
+tuning = [
+    "gepa==0.1.4",
+]
 
 [dependency-groups]
 dev = [

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alexhawat/judge-jev/shared/schemas/capture-record.schema.json",
+  "title": "Judge Jev capture record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "captured_at",
+    "trigger_reasons",
+    "rubric_id",
+    "rubric_version",
+    "rubric_hash",
+    "runtime",
+    "backend",
+    "backend_provenance",
+    "requested_model",
+    "model",
+    "state",
+    "answers",
+    "verdict",
+    "confidence",
+    "confidence_floor",
+    "deciding_answers",
+    "routing_reason",
+    "rule_margins"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "trigger_reasons": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["audit", "uncertain", "boundary", "downgraded", "non_pass", "rule_quota"]
+      }
+    },
+    "rubric_id": { "type": "string", "minLength": 1 },
+    "rubric_version": { "type": "string", "minLength": 1 },
+    "rubric_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "backend": { "type": "string", "enum": ["typesafe", "cloudflare", "replay"] },
+    "backend_provenance": {
+      "type": "string",
+      "enum": ["live_model", "recorded_model", "canned_demo"]
+    },
+    "requested_model": { "type": ["string", "null"] },
+    "model": { "type": "string" },
+    "state": { "type": "object" },
+    "answers": { "$ref": "judgment-result.schema.json#/$defs/answers" },
+    "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "confidence_floor": { "type": "number", "minimum": 0, "maximum": 1 },
+    "deciding_answers": { "type": "array", "items": { "type": "string" } },
+    "routing_reason": { "type": "string" },
+    "rule_margins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule", "verdict", "default", "evaluable", "matched", "margin", "conditions"],
+        "properties": {
+          "rule": { "type": "integer", "minimum": 0 },
+          "verdict": { "type": "string", "enum": ["pass", "fail", "review", "escalate", "skip"] },
+          "default": { "type": "boolean" },
+          "evaluable": { "type": "boolean" },
+          "matched": { "type": "boolean" },
+          "margin": { "type": ["number", "null"] },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["answer", "field", "op", "threshold", "observed", "kind", "matched", "margin"],
+              "properties": {
+                "answer": { "type": "string" },
+                "field": { "type": "string" },
+                "op": { "type": "string", "enum": [">=", ">", "<=", "<", "==", "!="] },
+                "threshold": {},
+                "observed": {},
+                "kind": { "type": "string", "enum": ["numeric", "categorical", "unevaluable"] },
+                "matched": { "type": ["boolean", "null"] },
+                "margin": { "type": ["number", "null"] }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

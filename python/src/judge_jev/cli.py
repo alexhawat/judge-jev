@@ -12,6 +12,8 @@ from typing import NoReturn
 from loguru import logger
 
 from judge_jev.canonical import strict_json_loads
+from judge_jev.backend import resolve_backend
+from judge_jev.capture import prune
 from judge_jev.funnel import read_input_text, replay_judgment, run_judgment
 from judge_jev.guided import (
     GuidedUsageError,
@@ -24,10 +26,12 @@ from judge_jev.guided import (
     cmd_trajectory,
     emit_result,
 )
+from judge_jev.gepa_tuning import instruction_proposal
 from judge_jev.logfire_tracing import TracingConfig, configure_tracing
 from judge_jev.models import RUNTIME_NAME, RUNTIME_VERSION, RubricError
 from judge_jev.rubric import list_rubric_ids, show_rubric
 from judge_jev.setup_cmd import run_setup
+from judge_jev.tuning import threshold_search
 from judge_jev.typesafe_client import JudgeJevError
 
 USAGE = """usage: judge-jev <command> ...
@@ -36,10 +40,13 @@ USAGE = """usage: judge-jev <command> ...
   reply  [--prompt TEXT|--prompt-file FILE] [--reply TEXT|--reply-file FILE] [--mock]
   trajectory --input <file.json|-> [--mock]
   input template --rubric <id> | input validate --rubric <id> --input <file.json|->
-  run    --rubric <id> --input <file.json|-> [--mock] [--format json|human] [--save]
+  run    --rubric <id> --input <file.json|-> [--backend typesafe|cloudflare|replay] [--mock] [--format json|human] [--save]
   replay --input <result.json|-> [--allow-version-drift] [--format json|human] [--save]
   explain --input <result.json|-> | --history-id <id>
   history list | show | replay | delete
+  capture prune --dir <capture-dir> --older-than <duration> [--apply]
+  tune thresholds --rubric <id> --set <cases.jsonl> --results <results.jsonl>
+  tune instructions --rubric <id> --question <id> --set <cases.jsonl> --budget <calls> [--live]
   rubric list | show --id <id>
   --version"""
 
@@ -79,11 +86,21 @@ def _tracing_active(args: argparse.Namespace) -> bool:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    try:
+        backend_id = resolve_backend(args.backend, mock=args.mock)
+    except ValueError as err:
+        print(f"judge-jev: {err}", file=sys.stderr)
+        return EXIT_USAGE
     tracing_active = _tracing_active(args)
+    backend_was_selected = args.backend is not None or os.environ.get("JUDGE_JEV_BACKEND") is not None or args.replay_input is not None
     result = run_judgment(
         args.rubric,
         Path(args.input),
         mock=args.mock,
+        backend_id=backend_id if backend_was_selected else None,
+        replay_input=Path(args.replay_input) if args.replay_input else None,
+        capture_dir=Path(args.capture or os.environ.get("JUDGE_JEV_CAPTURE")) if (args.capture or os.environ.get("JUDGE_JEV_CAPTURE")) else None,
+        capture_redact=args.redact,
         tracing_active=tracing_active,
     )
     emit_result(result.to_dict(), args.format, args.save)
@@ -111,6 +128,62 @@ def cmd_rubric(args: argparse.Namespace) -> int:
         print(show_rubric(args.id))
         return EXIT_OK
     return EXIT_USAGE
+
+
+def _duration_seconds(text: str) -> float:
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    suffix = text[-1:].lower()
+    try:
+        value = float(text[:-1]) * units[suffix] if suffix in units else float(text)
+    except ValueError as err:
+        raise JudgeJevError("--older-than must be seconds or a duration such as 30d") from err
+    if value < 0:
+        raise JudgeJevError("--older-than must be non-negative")
+    return value
+
+
+def cmd_capture(args: argparse.Namespace) -> int:
+    paths = prune(Path(args.dir), _duration_seconds(args.older_than), apply=args.apply)
+    print(json.dumps({"dry_run": not args.apply, "files": [str(path) for path in paths]}, sort_keys=True))
+    return EXIT_OK
+
+
+def cmd_tune(args: argparse.Namespace) -> int:
+    if args.tune_cmd == "thresholds":
+        report = threshold_search(
+            args.rubric,
+            Path(args.set),
+            Path(args.results),
+            seed=args.seed,
+            iterations=args.iterations,
+            candidates_per_iteration=args.candidates,
+            minimum_support=args.min_support,
+            synthetic_demo=args.synthetic_demo,
+            cost_policy_path=Path(args.cost_policy) if args.cost_policy else None,
+        )
+    elif args.tune_cmd == "instructions":
+        report = instruction_proposal(
+            args.rubric,
+            args.question,
+            Path(args.set),
+            live=args.live,
+            metric_budget=args.budget,
+            task_token_cap=args.task_token_cap,
+            max_tokens_per_call=args.max_tokens_per_call,
+            reflection_cost_cap=args.reflection_cost_cap,
+            reflection_model=args.reflection_model,
+            backend_id=args.backend,
+            cache_dir=Path(args.cache) if args.cache else None,
+            seed=args.seed,
+            minimum_support=args.min_support,
+        )
+    else:
+        return EXIT_USAGE
+    rendered = json.dumps(report, indent=2, sort_keys=True)
+    if args.output:
+        Path(args.output).write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
+    return EXIT_OK
 
 
 class UsageParser(argparse.ArgumentParser):
@@ -156,7 +229,23 @@ def _precheck(argv: list[str]) -> str | None:
         "replay": (("--input",), ("--allow-version-drift", "--save")),
     }
 
-    if command == "rubric":
+    if command == "tune":
+        sub = rest[0] if rest else None
+        if sub == "thresholds":
+            value_flags = ("--rubric", "--set", "--results")
+            bool_flags = ("--synthetic-demo",)
+        elif sub == "instructions":
+            value_flags = ("--rubric", "--question", "--set", "--budget")
+            bool_flags = ("--live",)
+        else:
+            return "tune needs subcommand: thresholds or instructions"
+        rest = rest[1:]
+    elif command == "capture":
+        sub = rest[0] if rest else None
+        if sub != "prune":
+            return "capture needs subcommand: prune"
+        value_flags, bool_flags, rest = ("--dir", "--older-than"), ("--apply",), rest[1:]
+    elif command == "rubric":
         sub = rest[0] if rest else None
         if sub is None:
             return "rubric needs a subcommand: list or show"
@@ -175,13 +264,27 @@ def _precheck(argv: list[str]) -> str | None:
     else:
         return f"unknown command: {command}"
 
-    optional_value_flags = ("--tracing-to", "--format") if command == "run" else (("--format",) if command == "replay" else ())
+    if command == "run":
+        optional_value_flags = (
+            "--tracing-to", "--format", "--backend", "--replay-input", "--capture", "--redact"
+        )
+    elif command == "tune":
+        optional_value_flags = (
+            "--seed", "--iterations", "--candidates", "--min-support", "--cost-policy", "--output",
+            "--task-token-cap", "--max-tokens-per-call", "--reflection-cost-cap", "--reflection-model",
+            "--backend", "--cache",
+        )
+    elif command == "replay":
+        optional_value_flags = ("--format",)
+    else:
+        optional_value_flags = ()
+    repeatable_value_flags = {"--redact"}
     seen: set[str] = set()
     index = 0
     while index < len(rest):
         arg = rest[index]
         if arg in optional_value_flags:
-            if arg in seen:
+            if arg in seen and arg not in repeatable_value_flags:
                 return f"{arg} given more than once"
             seen.add(arg)
             following = rest[index + 1] if index + 1 < len(rest) else None
@@ -268,6 +371,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--mock", action="store_true")
     _format_arg(run_p, default="json")
     _save_arg(run_p)
+    run_p.add_argument("--backend", default=None)
+    run_p.add_argument("--replay-input", default=None)
+    run_p.add_argument("--capture", default=None)
+    run_p.add_argument("--redact", action="append", default=[])
     run_p.add_argument(
         "--tracing",
         action="store_true",
@@ -379,6 +486,42 @@ def build_parser() -> argparse.ArgumentParser:
     show_p = rubric_sub.add_parser("show")
     show_p.add_argument("--id", required=True)
 
+    capture_p = sub.add_parser("capture", help="Capture retention commands")
+    capture_sub = capture_p.add_subparsers(dest="capture_cmd", required=True)
+    prune_p = capture_sub.add_parser("prune")
+    prune_p.add_argument("--dir", required=True)
+    prune_p.add_argument("--older-than", required=True)
+    prune_p.add_argument("--apply", action="store_true")
+
+    tune_p = sub.add_parser("tune", help="Proposal-only rubric tuning")
+    tune_sub = tune_p.add_subparsers(dest="tune_cmd", required=True)
+    thresholds_p = tune_sub.add_parser("thresholds")
+    thresholds_p.add_argument("--rubric", required=True)
+    thresholds_p.add_argument("--set", required=True)
+    thresholds_p.add_argument("--results", required=True)
+    thresholds_p.add_argument("--seed", type=int, default=1)
+    thresholds_p.add_argument("--iterations", type=int, default=8)
+    thresholds_p.add_argument("--candidates", type=int, default=24)
+    thresholds_p.add_argument("--min-support", type=int, default=2)
+    thresholds_p.add_argument("--cost-policy", default=None)
+    thresholds_p.add_argument("--synthetic-demo", action="store_true")
+    thresholds_p.add_argument("--output", default=None)
+    instructions_p = tune_sub.add_parser("instructions")
+    instructions_p.add_argument("--rubric", required=True)
+    instructions_p.add_argument("--question", required=True)
+    instructions_p.add_argument("--set", required=True)
+    instructions_p.add_argument("--budget", type=int, required=True)
+    instructions_p.add_argument("--live", action="store_true")
+    instructions_p.add_argument("--task-token-cap", type=int, default=0)
+    instructions_p.add_argument("--max-tokens-per-call", type=int, default=0)
+    instructions_p.add_argument("--reflection-cost-cap", type=float, default=0.0)
+    instructions_p.add_argument("--reflection-model", default=None)
+    instructions_p.add_argument("--backend", default="typesafe")
+    instructions_p.add_argument("--cache", default=None)
+    instructions_p.add_argument("--seed", type=int, default=1)
+    instructions_p.add_argument("--min-support", type=int, default=2)
+    instructions_p.add_argument("--output", default=None)
+
     return parser
 
 
@@ -475,6 +618,8 @@ def main(argv: list[str] | None = None) -> int:
         "explain": cmd_explain,
         "history": cmd_history,
         "rubric": cmd_rubric,
+        "capture": cmd_capture,
+        "tune": cmd_tune,
     }
     handler = handlers.get(args.command)
     if handler is None:

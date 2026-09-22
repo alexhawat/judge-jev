@@ -14,9 +14,11 @@
 ## CLI (both runtimes)
 
 - `judge-jev setup`
-- `judge-jev run --rubric <id> --input <path|-> [--mock] [--tracing] [--tracing-to logfire]`
+- `judge-jev run --rubric <id> --input <path|-> [--backend typesafe|cloudflare|replay] [--mock] [--capture <dir>]`
 - `judge-jev rubric list|show --id <id>`
 - `judge-jev replay --input <judgment-result.json|-> [--allow-version-drift]`
+- `judge-jev capture prune --dir <dir> --older-than <duration> [--apply]`
+- Python frontend: `judge-jev tune thresholds|instructions ...` (proposal-only by default)
 
 Python is the recommended human frontend and also provides `init`, `doctor`,
 `reply`, `trajectory`, `input template|validate`, `explain`, and opt-in `history`.

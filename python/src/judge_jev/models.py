@@ -133,6 +133,11 @@ class JudgmentResult:
     answers: dict[str, dict[str, Any]]
     routing_reason: str
     mock: bool
+    # Provider provenance. Optional defaults preserve programmatic construction
+    # and old saved result loading while new judgments always set them.
+    backend: str = "typesafe"
+    requested_model: str | None = None
+    backend_provenance: str = "live_model"
     # Answer IDs the matched rule read. These, and only these, determine `confidence`.
     deciding_answers: list[str] = field(default_factory=list)
     # The floor `confidence` was checked against, from confidence_floors[stakes].
