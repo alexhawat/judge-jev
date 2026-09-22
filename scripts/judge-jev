@@ -40,7 +40,7 @@ case "$RUNTIME" in
     # Always reconcile the environment with the lock. uv no-ops when it is fresh;
     # checking only for an old executable leaves stale dependencies after checkout.
     set +e
-    uv sync --project "$ROOT/python" --locked --extra tracing >&2
+    uv sync --project "$ROOT/python" --locked --extra tracing --quiet >&2
     prep=$?
     set -e
     [[ "$prep" == 0 ]] || exit 10

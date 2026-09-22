@@ -59,7 +59,7 @@ switch ($Runtime) {
         $PyBin = if (Test-Path $PyBinExe) { $PyBinExe } elseif (Test-Path $PyBinCmd) { $PyBinCmd } else { $PyBinPlain }
         # Always reconcile with the lock; an existing executable does not prove
         # dependencies still match this checkout.
-        uv sync --project (Join-Path $Root "python") --locked --extra tracing
+        uv sync --project (Join-Path $Root "python") --locked --extra tracing --quiet
         if ($LASTEXITCODE -ne 0) { exit 10 }
         if (-not (Test-Path $PyBin)) {
             Write-ErrLine "judge-jev: Python bootstrap did not install $PyBin"
