@@ -1,6 +1,9 @@
 use crate::budget::check_budget;
 use crate::canonical::CanonicalState;
-use crate::gates::{build_state_projection, escalate_on_injection, evaluate_gates, GateContext};
+use crate::gates::{
+    build_state_projection, escalate_on_injection, evaluate_gates, evaluate_replay_gates,
+    GateContext,
+};
 use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment};
 use crate::paths::repo_root;
 use crate::routing::route_verdict;
@@ -107,9 +110,9 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
         verdict: Some(&routed.verdict),
         confidence: Some(routed.confidence),
         confidence_floor: floor,
+        confidence_candidate: routed.confidence_candidate.as_deref(),
         replay: false,
         budget_ok: true,
-        routing_reason: Some(routed.reason.as_str()),
     });
     let (verdict, reason) = escalate_on_injection(&routed.verdict, &routed.reason, &gate_outcomes);
 
@@ -185,21 +188,20 @@ pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Resu
         .get(&rubric.stakes)
         .copied()
         .unwrap_or(0.0);
-    let gate_outcomes = if saved.deterministic_gates.is_empty() {
-        evaluate_gates(&GateContext {
+    let gate_outcomes = evaluate_replay_gates(
+        &GateContext {
             rubric: &rubric,
             filtered_state: None,
             answers: Some(&saved.answers),
             verdict: Some(&routed.verdict),
             confidence: Some(routed.confidence),
             confidence_floor: floor,
+            confidence_candidate: routed.confidence_candidate.as_deref(),
             replay: true,
             budget_ok: true,
-            routing_reason: Some(routed.reason.as_str()),
-        })
-    } else {
-        saved.deterministic_gates.clone()
-    };
+        },
+        &saved.deterministic_gates,
+    );
     let published_reason = format!("{prefix}: {}", routed.reason);
     let (verdict, published_reason) =
         escalate_on_injection(&routed.verdict, &published_reason, &gate_outcomes);

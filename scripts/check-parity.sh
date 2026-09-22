@@ -11,6 +11,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export JUDGE_JEV_ROOT="$ROOT"
+# This harness asserts informational budget diagnostics, so a host-level filter
+# such as RUST_LOG=warn must not make those contract checks disappear.
+export RUST_LOG=judge_jev=info
 BIN="$ROOT/rust/target/release/judge-jev"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -209,6 +212,96 @@ if [[ "$py_exit" != "$rs_exit" ]]; then
   failed=1
 else
   compare_results "$TMP/py.json" "$TMP/rs.json" "replay-drift-allowed" || failed=1
+fi
+
+# (d) Editing saved answers must recompute answer-derived diagnostics while the
+#     input-only gates remain clearly identified as evidence from the original run.
+python3 - "$TMP/saved.json" "$TMP/edited-answers.json" <<'PY'
+import json, sys
+saved = json.load(open(sys.argv[1]))
+saved["answers"].pop("screen.injection")
+json.dump(saved, open(sys.argv[2], "w"), indent=2)
+PY
+set +e
+py replay --input "$TMP/edited-answers.json" >"$TMP/py.json" 2>/dev/null
+py_exit=$?
+rs replay --input "$TMP/edited-answers.json" >"$TMP/rs.json" 2>/dev/null
+rs_exit=$?
+set -e
+if [[ "$py_exit" != "$rs_exit" ]]; then
+  echo "FAIL replay-edited-answers: exit codes differ (python=$py_exit rust=$rs_exit)" >&2
+  failed=1
+else
+  compare_results "$TMP/py.json" "$TMP/rs.json" "replay-edited-answers" || failed=1
+  python3 - "$TMP/py.json" <<'PY' || failed=1
+import json, sys
+result = json.load(open(sys.argv[1]))
+gates = {gate["gate_id"]: gate for gate in result["deterministic_gates"]}
+assert gates["answer_completeness"]["outcome"] == "fail"
+assert "screen.injection" in gates["answer_completeness"]["reason"]
+assert all(gates[name]["reason"].startswith("historical evidence from original run: ")
+           for name in ("state_projection", "token_budget", "injection_heuristic"))
+PY
+fi
+
+# (e) Results saved before gate metadata existed remain replayable, but replay must
+#     say that the input-only checks could not be rerun.
+python3 - "$TMP/saved.json" "$TMP/legacy.json" <<'PY'
+import json, sys
+saved = json.load(open(sys.argv[1]))
+saved.pop("deterministic_gates")
+saved.pop("state_projection")
+json.dump(saved, open(sys.argv[2], "w"), indent=2)
+PY
+set +e
+py replay --input "$TMP/legacy.json" >"$TMP/py.json" 2>/dev/null
+py_exit=$?
+rs replay --input "$TMP/legacy.json" >"$TMP/rs.json" 2>/dev/null
+rs_exit=$?
+set -e
+if [[ "$py_exit" != "$rs_exit" ]]; then
+  echo "FAIL replay-legacy: exit codes differ (python=$py_exit rust=$rs_exit)" >&2
+  failed=1
+else
+  compare_results "$TMP/py.json" "$TMP/rs.json" "replay-legacy" || failed=1
+  python3 - "$TMP/py.json" <<'PY' || failed=1
+import json, sys
+gates = json.load(open(sys.argv[1]))["deterministic_gates"]
+assert [gate["outcome"] for gate in gates[:3]] == ["skip", "skip", "skip"]
+assert all("replay lacks raw state and historical" in gate["reason"] for gate in gates[:3])
+PY
+fi
+
+# (f) A newer rubric with a stricter floor must replace the saved floor diagnostic,
+#     not leave a historical pass next to a newly downgraded review verdict.
+STRICT_ROOT="$TMP/strict-root"
+mkdir -p "$STRICT_ROOT/shared/rubrics"
+sed -e 's/version: "2.0.0"/version: "2.1.0"/' \
+    -e 's/read_only: 0.5/read_only: 0.99/' \
+    "$ROOT/shared/rubrics/assistant-reply.yaml" >"$STRICT_ROOT/shared/rubrics/assistant-reply.yaml"
+export JUDGE_JEV_ROOT="$STRICT_ROOT"
+set +e
+py replay --input "$TMP/saved.json" --allow-version-drift >"$TMP/py.json" 2>/dev/null
+py_exit=$?
+rs replay --input "$TMP/saved.json" --allow-version-drift >"$TMP/rs.json" 2>/dev/null
+rs_exit=$?
+set -e
+export JUDGE_JEV_ROOT="$ROOT"
+if [[ "$py_exit" != "$rs_exit" ]]; then
+  echo "FAIL replay-stricter-floor: exit codes differ (python=$py_exit rust=$rs_exit)" >&2
+  failed=1
+else
+  compare_results "$TMP/py.json" "$TMP/rs.json" "replay-stricter-floor" || failed=1
+  python3 - "$TMP/py.json" <<'PY' || failed=1
+import json, sys
+result = json.load(open(sys.argv[1]))
+gates = {gate["gate_id"]: gate for gate in result["deterministic_gates"]}
+assert result["verdict"] == "review"
+assert result["confidence_floor"] == 0.99
+assert gates["confidence_floor"]["outcome"] == "fail"
+assert "below 0.99 floor (downgraded pass to review)" in gates["confidence_floor"]["reason"]
+assert "meets 0.50 floor" not in gates["confidence_floor"]["reason"]
+PY
 fi
 
 # --------------------------------------------------------- malformed argv (#3)
@@ -411,6 +504,8 @@ confidence_floors:
   read_only: 0.5
 state_filter:
   - goal
+  - résumé
+  - emoji.😀
   - steps[].tool
   - steps[].input
   - ticket.subject
@@ -445,6 +540,8 @@ sed -e 's/^  - goal$/  - { path: "goal", required: true }\n  - { path: "reply", 
 cat >"$TMP/paths-input.json" <<'JSON'
 {
   "goal": "find the readme",
+  "résumé": "Unicode path",
+  "emoji": { "😀": "supplementary Unicode path" },
   "steps": [
     { "tool": "glob", "input": "**/README.md", "output": "DROPPED-step-output" },
     { "tool": "read", "input": "README.md", "output": "DROPPED-step-output" }

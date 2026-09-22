@@ -39,10 +39,20 @@ If a routing rule needs an answer that is absent from the API response, the run 
 |-------|---------|
 | `rubric_id`, `rubric_version` | Which rubric and version judged |
 | `model` | Resolved Jev model id (`jev-1.13.0` under `--mock`) |
-| `state_projection` | Allowlisted `state_filter` paths, stable hash, projected top-level keys |
+| `state_projection` | Allowlisted `state_filter` paths, stable hash of the sorted path names, projected top-level keys |
 | `deterministic_gates` | Code-run gates: `gate_id`, `outcome` (`pass`/`fail`/`skip`), `reason` |
 | `usage` | Token counts when reported |
 | `mock` | Whether `--mock` was used |
+
+The projection hash is SHA-256 over the compact JSON array of sorted path names,
+with non-ASCII code points escaped as JSON `\u` sequences. Its scope is the
+allowlist only: projected values and the rest of the rubric are outside the hash.
+
+`replay` recomputes `answer_completeness` and `confidence_floor` against the current
+answers and rubric. It cannot rerun `state_projection`, `token_budget`, or
+`injection_heuristic` without the original raw state, so saved outcomes for those
+three are retained with a `historical evidence from original run` label. When a
+saved result lacks that evidence, replay emits `skip` for the unavailable gate.
 
 ## Fail-closed
 

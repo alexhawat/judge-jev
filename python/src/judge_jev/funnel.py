@@ -16,6 +16,7 @@ from judge_jev.gates import (
     build_state_projection,
     escalate_on_injection,
     evaluate_gates,
+    evaluate_replay_gates,
     state_projection_hash,
 )
 from judge_jev.logfire_tracing import span_gates, span_judge_run, span_route, span_system_one
@@ -29,7 +30,7 @@ from judge_jev.models import (
     Usage,
 )
 from judge_jev.paths import repo_root
-from judge_jev.routing import route_verdict
+from judge_jev.routing import route_verdict_with_candidate
 from judge_jev.rubric import load_rubric
 from judge_jev.state_filter import filter_state
 from judge_jev.typesafe_client import (
@@ -149,7 +150,9 @@ def run_judgment(
             if not answers:
                 raise JudgeJevError("system_one returned no answers")
 
-        verdict, reason, stage, deciding, confidence = route_verdict(rubric, answers)
+        verdict, reason, stage, deciding, confidence, confidence_candidate = (
+            route_verdict_with_candidate(rubric, answers)
+        )
 
         gate_ctx = GateContext(
             rubric=rubric,
@@ -158,9 +161,9 @@ def run_judgment(
             verdict=verdict,
             confidence=confidence,
             confidence_floor=rubric.confidence_floor,
+            confidence_candidate=confidence_candidate,
             replay=False,
             budget_ok=True,
-            routing_reason=reason,
         )
         gate_outcomes = evaluate_gates(gate_ctx)
         verdict, reason = escalate_on_injection(verdict, reason, gate_outcomes)
@@ -237,7 +240,9 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
         raise JudgeJevError(f"{drift}; re-run with --allow-version-drift to route it anyway")
 
     answers = saved["answers"]
-    verdict, reason, stage, deciding, confidence = route_verdict(rubric, answers)
+    verdict, reason, stage, deciding, confidence, confidence_candidate = (
+        route_verdict_with_candidate(rubric, answers)
+    )
     # Under drift the result records the version it was ROUTED under, so the reason
     # is the only place the original version survives. Say it there.
     prefix = f"replay ({drift})" if drift is not None else "replay"
@@ -255,23 +260,23 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
         hash=str(raw_hash) if raw_hash else state_projection_hash(paths),
         projected_keys=[str(key) for key in (projection_data.get("projected_keys") or [])],
     )
-    gate_outcomes = [
+    historical_gates = [
         GateOutcome(g["gate_id"], g["outcome"], g["reason"])
         for g in saved.get("deterministic_gates") or []
     ]
-    if not gate_outcomes:
-        gate_outcomes = evaluate_gates(
-            GateContext(
-                rubric=rubric,
-                filtered_state=None,
-                answers=answers,
-                verdict=verdict,
-                confidence=confidence,
-                confidence_floor=rubric.confidence_floor,
-                replay=True,
-                routing_reason=reason,
-            )
-        )
+    gate_outcomes = evaluate_replay_gates(
+        GateContext(
+            rubric=rubric,
+            filtered_state=None,
+            answers=answers,
+            verdict=verdict,
+            confidence=confidence,
+            confidence_floor=rubric.confidence_floor,
+            confidence_candidate=confidence_candidate,
+            replay=True,
+        ),
+        historical_gates,
+    )
 
     verdict, published_reason = escalate_on_injection(verdict, f"{prefix}: {reason}", gate_outcomes)
     return JudgmentResult(

@@ -107,15 +107,26 @@ def decision_confidence(
 def route_verdict(
     rubric: Rubric, answers: dict[str, dict[str, Any]]
 ) -> tuple[str, str, str, list[str], float]:
-    """Return (verdict, reason, stage, deciding_answers, confidence).
+    """Return the stable public routing tuple."""
+    verdict, reason, stage, deciding, confidence, _candidate = route_verdict_with_candidate(
+        rubric, answers
+    )
+    return verdict, reason, stage, deciding, confidence
+
+
+def route_verdict_with_candidate(
+    rubric: Rubric, answers: dict[str, dict[str, Any]]
+) -> tuple[str, str, str, list[str], float, str | None]:
+    """Return routing fields plus any pass/fail candidate downgraded by the floor.
 
     The first rule whose conditions all hold wins. A rule that cannot be evaluated
-    escalates rather than being skipped.
+    escalates rather than being skipped. The final element is the automatic
+    pass/fail candidate when the confidence floor downgraded it to review.
     """
     for index, rule in enumerate(rubric.rules):
         if rule.default:
             # The catch-all decided nothing, so there is no confidence to report.
-            return rule.verdict, rule.reason, "route", [], 0.0
+            return rule.verdict, rule.reason, "route", [], 0.0, None
 
         try:
             matched = all(
@@ -132,6 +143,7 @@ def route_verdict(
                 _stage_for(rubric, rule.answer_ids),
                 [],
                 0.0,
+                None,
             )
 
         if not matched:
@@ -153,12 +165,13 @@ def route_verdict(
                 stage,
                 list(deciding),
                 confidence,
+                rule.verdict,
             )
 
-        return rule.verdict, rule.reason, stage, list(deciding), confidence
+        return rule.verdict, rule.reason, stage, list(deciding), confidence, None
 
     # No rule matched and the rubric declared no default.
-    return "review", "No routing rule matched.", "route", [], 0.0
+    return "review", "No routing rule matched.", "route", [], 0.0, None
 
 
 def _raise_missing(index: int, answer_id: str) -> bool:

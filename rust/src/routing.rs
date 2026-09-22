@@ -15,6 +15,8 @@ pub struct Routed {
     pub stage: String,
     pub deciding: Vec<String>,
     pub confidence: f64,
+    /// Automatic pass/fail candidate when the floor downgraded it to review.
+    pub confidence_candidate: Option<String>,
 }
 
 /// Compare one answer field against a condition's value.
@@ -84,6 +86,7 @@ pub fn route_verdict(rubric: &Rubric, answers: &HashMap<String, Answer>) -> Rout
                 stage: "route".to_string(),
                 deciding: Vec::new(),
                 confidence: 0.0,
+                confidence_candidate: None,
             };
         }
 
@@ -132,6 +135,7 @@ pub fn route_verdict(rubric: &Rubric, answers: &HashMap<String, Answer>) -> Rout
                 stage,
                 deciding,
                 confidence,
+                confidence_candidate: Some(rule.verdict.clone()),
             };
         }
 
@@ -141,6 +145,7 @@ pub fn route_verdict(rubric: &Rubric, answers: &HashMap<String, Answer>) -> Rout
             stage,
             deciding,
             confidence,
+            confidence_candidate: None,
         };
     }
 
@@ -151,6 +156,7 @@ pub fn route_verdict(rubric: &Rubric, answers: &HashMap<String, Answer>) -> Rout
         stage: "route".to_string(),
         deciding: Vec::new(),
         confidence: 0.0,
+        confidence_candidate: None,
     }
 }
 
@@ -161,5 +167,6 @@ fn unevaluable(rubric: &Rubric, verdict: &str, answer_id: &str, rule_answers: &[
         stage: stage_for(rubric, rule_answers),
         deciding: Vec::new(),
         confidence: 0.0,
+        confidence_candidate: None,
     }
 }

@@ -53,10 +53,9 @@ class GateContext:
     verdict: str | None
     confidence: float | None
     confidence_floor: float
+    confidence_candidate: str | None = None
     replay: bool = False
     budget_ok: bool = True
-    # Routing reason, so a floor downgrade can be recorded against the matched rule.
-    routing_reason: str | None = None
 
 
 def evaluate_gates(ctx: GateContext) -> list[GateOutcome]:
@@ -71,9 +70,9 @@ def evaluate_gates(ctx: GateContext) -> list[GateOutcome]:
         outcomes.append(
             _confidence_floor_gate(
                 ctx.verdict,
+                ctx.confidence_candidate,
                 ctx.confidence,
                 ctx.confidence_floor,
-                ctx.routing_reason,
             )
         )
         return outcomes
@@ -100,12 +99,48 @@ def evaluate_gates(ctx: GateContext) -> list[GateOutcome]:
     outcomes.append(
         _confidence_floor_gate(
             ctx.verdict,
+            ctx.confidence_candidate,
             ctx.confidence,
             ctx.confidence_floor,
-            ctx.routing_reason,
         )
     )
     return outcomes
+
+
+def evaluate_replay_gates(
+    ctx: GateContext,
+    historical_gates: list[GateOutcome],
+) -> list[GateOutcome]:
+    """Combine original input-only evidence with current answer-derived gates."""
+    current = evaluate_gates(ctx)
+    historical_by_id = {
+        gate.gate_id: gate
+        for gate in historical_gates
+        if gate.gate_id in {"state_projection", "token_budget", "injection_heuristic"}
+    }
+    for index, gate_id in enumerate(
+        ("state_projection", "token_budget", "injection_heuristic")
+    ):
+        historical = historical_by_id.get(gate_id)
+        unavailable_reason = f"replay lacks raw state and historical {gate_id} evidence"
+        if (
+            historical is None
+            or historical.reason == unavailable_reason
+            or historical.reason.startswith("replay does not ")
+        ):
+            current[index] = GateOutcome(gate_id, "skip", unavailable_reason)
+            continue
+
+        reason = historical.reason
+        prefix = "historical evidence from original run: "
+        while reason.startswith(prefix):
+            reason = reason[len(prefix) :]
+        current[index] = GateOutcome(
+            historical.gate_id,
+            historical.outcome,
+            f"{prefix}{reason}",
+        )
+    return current
 
 
 def _injection_heuristic_gate(filtered_state: dict[str, Any] | None) -> GateOutcome:
@@ -147,33 +182,15 @@ def escalate_on_injection(verdict: str, reason: str, gates: list[GateOutcome]) -
     return "escalate", f"{reason} Injection heuristic failed; verdict escalated."
 
 
-def _gated_subject(verdict: str, routing_reason: str | None) -> str:
-    """The rule verdict the floor applies to, before a downgrade rewrites it to review."""
-    if not routing_reason:
-        return verdict
-    marker = "Downgraded from '"
-    index = routing_reason.rfind(marker)
-    if index == -1:
-        return verdict
-    rest = routing_reason[index + len(marker) :]
-    end = rest.find("'")
-    if end <= 0:
-        return verdict
-    original = rest[:end]
-    if original in GATED_VERDICTS:
-        return original
-    return verdict
-
-
 def _confidence_floor_gate(
     verdict: str | None,
+    confidence_candidate: str | None,
     confidence: float | None,
     floor: float,
-    routing_reason: str | None = None,
 ) -> GateOutcome:
     if verdict is None or confidence is None:
         return GateOutcome("confidence_floor", "skip", "routing not complete")
-    subject = _gated_subject(verdict, routing_reason)
+    subject = confidence_candidate or verdict
     if subject not in GATED_VERDICTS:
         return GateOutcome(
             "confidence_floor",
@@ -186,7 +203,7 @@ def _confidence_floor_gate(
             "pass",
             f"confidence {confidence:.2f} meets {floor:.2f} floor",
         )
-    if subject != verdict:
+    if confidence_candidate is not None and verdict == "review":
         return GateOutcome(
             "confidence_floor",
             "fail",
