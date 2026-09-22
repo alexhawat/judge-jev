@@ -8,7 +8,7 @@ import re
 import stat
 import tempfile
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -77,8 +77,8 @@ def save_result(result: dict[str, Any]) -> str:
         root.chmod(0o700)
     except OSError:
         pass
-    result_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid.uuid4().hex[:8]
-    payload = {"history_id": result_id, "saved_at": datetime.now(UTC).isoformat(), "result": result}
+    result_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid.uuid4().hex[:8]
+    payload = {"history_id": result_id, "saved_at": datetime.now(timezone.utc).isoformat(), "result": result}
     fd, temporary = tempfile.mkstemp(prefix=".result-", suffix=".tmp", dir=root)
     try:
         if hasattr(os, "fchmod"):

@@ -277,7 +277,8 @@ def test_setup_updates_preference_only_after_install_and_smoke(tmp_path: Path) -
     assert runtime.read_text() == "python\n"
 
 
-def test_wheel_uses_packaged_assets_outside_checkout(tmp_path: Path) -> None:
+@pytest.mark.parametrize("from_sdist", [False, True], ids=["checkout", "sdist"])
+def test_wheel_uses_packaged_assets_outside_checkout(tmp_path: Path, from_sdist: bool) -> None:
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv is required to build the wheel")
@@ -288,9 +289,23 @@ def test_wheel_uses_packaged_assets_outside_checkout(tmp_path: Path) -> None:
         env.update(UV_CACHE_DIR=str(warm_cache), UV_OFFLINE="1")
     else:
         env["UV_CACHE_DIR"] = str(tmp_path / "uv-cache")
+    source = REPO / "python"
+    if from_sdist:
+        subprocess.run(
+            [uv, "build", "--sdist", "--out-dir", str(dist)],
+            cwd=source,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        unpacked = tmp_path / "unpacked"
+        shutil.unpack_archive(str(next(dist.glob("*.tar.gz"))), str(unpacked))
+        source = next(unpacked.iterdir())
+        assert not (source.parent / "shared").exists()
     subprocess.run(
         [uv, "build", "--wheel", "--out-dir", str(dist)],
-        cwd=REPO / "python",
+        cwd=source,
         env=env,
         check=True,
         capture_output=True,
@@ -320,10 +335,12 @@ def test_wheel_uses_packaged_assets_outside_checkout(tmp_path: Path) -> None:
         [
             str(python),
             "-c",
+            "from judge_jev.cli import main; "
             "from judge_jev.paths import rubrics_dir, schemas_dir; "
             "from judge_jev.rubric import load_rubric; "
             "r=rubrics_dir(); s=schemas_dir(); assert load_rubric('assistant-reply').id == 'assistant-reply'; "
             "assert (s/'judgment-result.schema.json').is_file(); "
+            "assert main(['--version']) == 0; "
             "print(r, s)",
         ],
         cwd=outside,
