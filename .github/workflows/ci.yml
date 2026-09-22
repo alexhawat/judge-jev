@@ -31,6 +31,12 @@ jobs:
           cd python
           uv sync --locked --dev --extra tracing
           uv run --extra tracing pytest tests/test_tracing.py -q
+      - name: Test pinned optional GEPA contract
+        run: |
+          cd python
+          uv sync --locked --dev --extra tuning
+          uv run --extra tuning python -c 'from gepa import optimize; assert callable(optimize)'
+          uv run --extra tuning pytest tests/test_gepa_tuning.py -q
       - name: Smoke CLI (mock)
         run: |
           cd python

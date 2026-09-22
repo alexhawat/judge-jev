@@ -30,7 +30,7 @@ struct SystemOneRequest {
 #[derive(Debug, Serialize)]
 pub struct QuestionPayload {
     #[serde(rename = "type")]
-    qtype: String,
+    pub qtype: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

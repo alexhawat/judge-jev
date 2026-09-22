@@ -63,6 +63,9 @@ Coding agents and contributors should read [AGENTS.md](AGENTS.md) and
 | `judge-jev replay --input <result.json\|-> [--allow-version-drift]` | Re-route saved answers |
 | `judge-jev explain --input <result.json\|->` | Explain rule comparisons and gate overrides offline |
 | `judge-jev history list\|show\|replay\|delete` | Manage opt-in, result-only local history |
+| `judge-jev capture prune --dir <dir> --older-than 30d [--apply]` | Preview or enforce capture retention |
+| `judge-jev tune thresholds ...` | Propose numeric rubric changes offline (Python frontend) |
+| `judge-jev tune instructions ...` | Plan or explicitly run budgeted GEPA proposals (Python frontend) |
 | `judge-jev --version` | Print the runtime and its version |
 
 Exit codes — verdicts: `0` pass, `1` fail, `2` review, `3` escalate, `4` skip.
@@ -113,6 +116,8 @@ Each rubric implements: **screen → profile → locate → score → route**
 - Routing rules are **declarative data** in the rubric YAML, evaluated identically by
   both runtimes. No runtime interprets a rule as code.
 - `--mock` provides deterministic CI-friendly answers without `TYPESAFE_API_KEY`.
+- `--backend typesafe|cloudflare|replay` selects a capability-declared provider;
+  `--mock` remains an alias for canned replay.
 
 ### Routing rules
 
@@ -189,6 +194,18 @@ On replay, answer completeness and the confidence floor are recomputed from the
 current answers and rubric. Input-only gates retain explicitly labeled historical
 evidence when it was saved; otherwise they are `skip` because raw state is unavailable.
 
+It also records the selected `backend`, rubric `requested_model`, and whether the
+answers are live, recorded, or a canned demo. See [`docs/backends.md`](docs/backends.md).
+
+### Opt-in capture and proposal tooling
+
+`run --capture <dir>` (or `JUDGE_JEV_CAPTURE`) collects bounded JSONL evidence through
+a background writer. Repeat `--redact` for fields that must never persist. Captures
+combine an independent audit slice with uncertainty, boundary, downgrade, per-rule,
+and non-pass enrichment; only the audit stream is an unbiased sample. Capture failure
+never changes a verdict. Retention and both proposal workflows are documented in
+[`docs/capture-and-tuning.md`](docs/capture-and-tuning.md).
+
 ### Optional tracing (Python)
 
 ```bash
@@ -239,6 +256,9 @@ Set `JUDGE_JEV_RUNTIME=python|rust` or run setup interactively.
 |----------|--------|
 | `JUDGE_JEV_RUNTIME` | `python` or `rust`; overrides `.judge-jev/runtime` for machine commands |
 | `TYPESAFE_API_KEY` | Required for live judging |
+| `JUDGE_JEV_BACKEND` | `typesafe` (default), `cloudflare`, or `replay`; an explicit `--backend` wins |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | Required by the Cloudflare backend |
+| `JUDGE_JEV_CAPTURE` | Opt-in capture directory; unset means no production data is stored |
 | `JUDGE_JEV_TOKEN_BUDGET` | Ceiling, in estimated tokens, for one System One request (default `32000`). The estimate covers the filtered state and the rubric's questions together and is logged at INFO on every run. Exceeding it exits `10` before anything is sent, naming the largest contributing key. Must be a positive integer. |
 | `JUDGE_JEV_MAX_RETRIES` | Retries after the initial attempt on a 408, 429, 5xx, connection or timeout error (default `2`, matching `typesafe-sdk`). `0` disables retries. Backoff is 0.5s doubling to a 5s cap with jitter. Rust enforces a strict 30s monotonic deadline across requests and sleeps. Python passes the SDK's documented 30s retry budget plus 10s per-operation timeout; the SDK stops before a retry that would exceed its budget but does not preempt an in-flight operation at the remaining-budget boundary. |
 | `JUDGE_JEV_LOGFIRE_TOKEN` | Optional Logfire write token (Python `[tracing]` extra). The token selects the project and region. |

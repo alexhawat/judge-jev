@@ -35,7 +35,7 @@ if ($env:JUDGE_JEV_RUNTIME) {
     $Runtime = "python"
 }
 
-$Guided = @("init", "doctor", "reply", "trajectory", "input", "explain", "history")
+$Guided = @("init", "doctor", "reply", "trajectory", "input", "explain", "history", "tune")
 $Command = $null
 $Previous = $null
 foreach ($ArgValue in $args) {
@@ -55,7 +55,11 @@ switch ($Runtime) {
         }
         # Always reconcile with the lock; an existing executable does not prove
         # dependencies still match this checkout.
-        uv sync --project (Join-Path $Root "python") --locked --inexact --quiet
+        $SyncArgs = @("sync", "--project", (Join-Path $Root "python"), "--locked", "--inexact", "--quiet")
+        if ($Command -eq "tune" -and $args -contains "--live") {
+            $SyncArgs += @("--extra", "tuning")
+        }
+        uv @SyncArgs
         if ($LASTEXITCODE -ne 0) { exit 10 }
         # Resolve after sync: on a fresh Windows checkout the executable did not
         # exist before uv created .venv/Scripts.

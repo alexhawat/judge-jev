@@ -1,5 +1,7 @@
 use anyhow::Result;
-use judge_jev::funnel::{read_input_text, replay_judgment, run_judgment};
+use judge_jev::backend::resolve_backend;
+use judge_jev::capture::prune;
+use judge_jev::funnel::{read_input_text, replay_judgment, run_judgment_configured};
 use judge_jev::models::{Answer, JudgmentResult, SavedJudgment, RUNTIME_NAME, RUNTIME_VERSION};
 use judge_jev::rubric::{list_rubric_ids, show_rubric};
 use judge_jev::{exit_for_verdict, setup, EXIT_ERROR, EXIT_OK, EXIT_USAGE};
@@ -9,10 +11,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage: judge-jev <setup|run|rubric|replay> ...
+const USAGE: &str = "usage: judge-jev <setup|run|rubric|replay|capture> ...
   setup
-  run    --rubric <id> --input <file.json|-> [--mock] [--format json|human] [--tracing] [--tracing-to logfire]
+  run    --rubric <id> --input <file.json|-> [--backend typesafe|cloudflare|replay] [--replay-input <result.json>] [--mock] [--format json|human] [--tracing] [--tracing-to logfire]
   replay --input <result.json|-> [--allow-version-drift] [--format json|human]
+  capture prune --dir <capture-dir> --older-than <duration> [--apply]
   rubric list | show --id <id>
   --version";
 
@@ -112,7 +115,16 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
         "run" => {
             let flags = match Flags::parse(
                 &args[1..],
-                &["--rubric", "--input", "--tracing-to", "--format"],
+                &[
+                    "--rubric",
+                    "--input",
+                    "--tracing-to",
+                    "--format",
+                    "--backend",
+                    "--replay-input",
+                    "--capture",
+                    "--redact",
+                ],
                 &["--mock", "--tracing"],
             ) {
                 Ok(flags) => flags,
@@ -141,7 +153,29 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
                     anyhow::bail!("unsupported tracing sink '{sink}'; only 'logfire' is available");
                 }
             }
-            let result = run_judgment(&rubric, &PathBuf::from(input), flags.is_set("--mock"))?;
+            let backend = match resolve_backend(
+                flags.values.get("--backend").map(String::as_str),
+                flags.is_set("--mock"),
+            ) {
+                Ok(value) => value,
+                Err(message) => return Ok(usage_error(&message)),
+            };
+            let replay_input = flags.values.get("--replay-input").map(PathBuf::from);
+            let capture_value = flags
+                .values
+                .get("--capture")
+                .cloned()
+                .or_else(|| std::env::var("JUDGE_JEV_CAPTURE").ok());
+            let capture_dir = capture_value.as_ref().map(PathBuf::from);
+            let result = run_judgment_configured(
+                &rubric,
+                &PathBuf::from(input),
+                flags.is_set("--mock"),
+                &backend,
+                replay_input.as_deref(),
+                capture_dir.as_deref(),
+                flags.get_all("--redact"),
+            )?;
             print_result(&result, format, false)?;
             Ok(exit_for_verdict(&result.verdict))
         }
@@ -169,6 +203,32 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
             print_result(&result, format, true)?;
             Ok(exit_for_verdict(&result.verdict))
         }
+        "capture" => match args.get(1).map(String::as_str) {
+            Some("prune") => {
+                let flags = match Flags::parse(&args[2..], &["--dir", "--older-than"], &["--apply"])
+                {
+                    Ok(flags) => flags,
+                    Err(msg) => return Ok(usage_error(&msg)),
+                };
+                let (directory, older_than) =
+                    match (flags.require("--dir"), flags.require("--older-than")) {
+                        (Ok(directory), Ok(older_than)) => (directory, older_than),
+                        (Err(msg), _) | (_, Err(msg)) => return Ok(usage_error(&msg)),
+                    };
+                let duration = parse_duration(&older_than)?;
+                let apply = flags.is_set("--apply");
+                let paths = prune(&PathBuf::from(directory), duration, apply)?;
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "dry_run": !apply,
+                        "files": paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                    }))?
+                );
+                Ok(EXIT_OK)
+            }
+            _ => Ok(usage_error("capture needs subcommand: prune")),
+        },
         "rubric" => match args.get(1).map(String::as_str) {
             Some("list") => {
                 if let Err(msg) = Flags::parse(&args[2..], &[], &[]) {
@@ -218,6 +278,7 @@ fn usage_error(message: &str) -> i32 {
 /// is now an error.
 struct Flags {
     values: HashMap<String, String>,
+    multi: HashMap<String, Vec<String>>,
     set: HashSet<String>,
 }
 
@@ -225,17 +286,28 @@ impl Flags {
     fn parse(args: &[String], value_flags: &[&str], bool_flags: &[&str]) -> Result<Self, String> {
         let mut values: HashMap<String, String> = HashMap::new();
         let mut set: HashSet<String> = HashSet::new();
+        let mut multi: HashMap<String, Vec<String>> = HashMap::new();
         let mut i = 0;
         while i < args.len() {
             let arg = args[i].as_str();
             if value_flags.contains(&arg) {
-                if values.contains_key(arg) {
+                if values.contains_key(arg) && arg != "--redact" {
                     return Err(format!("{arg} given more than once"));
                 }
                 // `-` is a value (stdin), not the start of another flag.
                 match args.get(i + 1) {
                     Some(value) if value == "-" || !value.starts_with('-') => {
-                        values.insert(arg.to_string(), value.clone());
+                        if arg == "--redact" {
+                            multi
+                                .entry(arg.to_string())
+                                .or_default()
+                                .push(value.clone());
+                            values
+                                .entry(arg.to_string())
+                                .or_insert_with(|| value.clone());
+                        } else {
+                            values.insert(arg.to_string(), value.clone());
+                        }
                     }
                     _ => return Err(format!("{arg} needs a value")),
                 }
@@ -254,7 +326,7 @@ impl Flags {
             }
             return Err(format!("unexpected argument: {arg}"));
         }
-        Ok(Flags { values, set })
+        Ok(Flags { values, multi, set })
     }
 
     fn require(&self, name: &str) -> Result<String, String> {
@@ -267,6 +339,27 @@ impl Flags {
     fn is_set(&self, name: &str) -> bool {
         self.set.contains(name)
     }
+
+    fn get_all(&self, name: &str) -> &[String] {
+        self.multi.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+fn parse_duration(text: &str) -> Result<std::time::Duration> {
+    let (number, multiplier) = match text.chars().last() {
+        Some('s') | Some('S') => (&text[..text.len() - 1], 1.0),
+        Some('m') | Some('M') => (&text[..text.len() - 1], 60.0),
+        Some('h') | Some('H') => (&text[..text.len() - 1], 3600.0),
+        Some('d') | Some('D') => (&text[..text.len() - 1], 86400.0),
+        _ => (text, 1.0),
+    };
+    let value: f64 = number
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--older-than must be seconds or a duration such as 30d"))?;
+    if !value.is_finite() || value < 0.0 {
+        anyhow::bail!("--older-than must be non-negative");
+    }
+    Ok(std::time::Duration::from_secs_f64(value * multiplier))
 }
 
 #[derive(Clone, Copy)]

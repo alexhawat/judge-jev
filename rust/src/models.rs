@@ -93,6 +93,12 @@ pub struct JudgmentResult {
     pub answers: HashMap<String, Answer>,
     pub routing_reason: String,
     pub mock: bool,
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    #[serde(default)]
+    pub requested_model: Option<String>,
+    #[serde(default = "default_provenance")]
+    pub backend_provenance: String,
     /// Answer IDs the matched rule read. These, and only these, determine `confidence`.
     #[serde(default)]
     pub deciding_answers: Vec<String>,
@@ -129,6 +135,10 @@ pub struct SavedJudgment {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub requested_model: Option<String>,
+    #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
     pub usage: Usage,
     #[serde(default)]
     pub mock: bool,
@@ -153,6 +163,8 @@ impl JudgmentResult {
             rubric_hash: Some(self.rubric_hash.clone()),
             answers: self.answers.clone(),
             model: Some(self.model.clone()),
+            requested_model: self.requested_model.clone(),
+            backend: Some(self.backend.clone()),
             usage: self.usage.clone(),
             mock: self.mock,
             request_id: self.request_id.clone(),
@@ -162,6 +174,14 @@ impl JudgmentResult {
             deterministic_gates: self.deterministic_gates.clone(),
         }
     }
+}
+
+fn default_backend() -> String {
+    "typesafe".into()
+}
+
+fn default_provenance() -> String {
+    "live_model".into()
 }
 
 #[derive(Debug, Clone, Serialize)]

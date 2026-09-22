@@ -1,0 +1,168 @@
+{
+  "captured_at": "2026-01-02T03:04:05Z",
+  "redact_paths": [
+    "context.customer.email",
+    "context.steps[].token"
+  ],
+  "result": {
+    "answers": {
+      "locate.hallucination_risk": {
+        "noul": 0.2,
+        "type": "noul"
+      },
+      "locate.harmful": {
+        "noul": 0.15,
+        "type": "noul"
+      },
+      "profile.intent": {
+        "choice": "clarification",
+        "confidence": 0.8344,
+        "probabilities": {
+          "answer": 0.1,
+          "clarification": 0.7,
+          "mixed": 0.1,
+          "refusal": 0.1
+        },
+        "type": "choice"
+      },
+      "route.escalate": {
+        "noul": 0.1,
+        "type": "noul"
+      },
+      "score.coherence": {
+        "confidence": 0.7646,
+        "legend": {
+          "0": "Incoherent or contradictory",
+          "1": "Hard to follow",
+          "2": "Acceptable structure",
+          "3": "Clear and organized",
+          "4": "Exceptionally clear"
+        },
+        "probabilities": {
+          "0": 0.2,
+          "1": 0.2,
+          "2": 0.2,
+          "3": 0.2,
+          "4": 0.2
+        },
+        "score": 2.573,
+        "type": "score"
+      },
+      "score.helpfulness": {
+        "confidence": 0.7592,
+        "legend": {
+          "0": "Not helpful or off-topic",
+          "1": "Minimally helpful",
+          "2": "Adequately helpful",
+          "3": "Very helpful",
+          "4": "Exemplary"
+        },
+        "probabilities": {
+          "0": 0.2,
+          "1": 0.2,
+          "2": 0.2,
+          "3": 0.2,
+          "4": 0.2
+        },
+        "score": 2.546,
+        "type": "score"
+      },
+      "screen.injection": {
+        "noul": 0.12,
+        "type": "noul"
+      },
+      "screen.judgeable": {
+        "noul": 0.9,
+        "type": "noul"
+      }
+    },
+    "backend": "replay",
+    "backend_provenance": "canned_demo",
+    "confidence": 0.7592,
+    "confidence_floor": 0.5,
+    "deciding_answers": [
+      "score.helpfulness",
+      "score.coherence"
+    ],
+    "deterministic_gates": [
+      {
+        "gate_id": "state_projection",
+        "outcome": "pass",
+        "reason": "projected 3 top-level keys from 3 paths"
+      },
+      {
+        "gate_id": "token_budget",
+        "outcome": "pass",
+        "reason": "state and questions within budget"
+      },
+      {
+        "gate_id": "injection_heuristic",
+        "outcome": "pass",
+        "reason": "no known injection markers"
+      },
+      {
+        "gate_id": "answer_completeness",
+        "outcome": "pass",
+        "reason": "all 8 questions answered"
+      },
+      {
+        "gate_id": "confidence_floor",
+        "outcome": "pass",
+        "reason": "confidence 0.76 meets 0.50 floor"
+      }
+    ],
+    "mock": true,
+    "model": "jev-1.13.0",
+    "request_id": "mock-request-id",
+    "requested_model": "jev-1.13.0",
+    "routing_reason": "Meets helpfulness and coherence thresholds.",
+    "rubric_hash": "sha256:ed46388cf214b06a878ce7cc6c2581e4550b85b0e21d26e207eca03198c141a4",
+    "rubric_id": "assistant-reply",
+    "rubric_version": "3.0.0",
+    "runtime": {
+      "name": "python",
+      "version": "0.1.0"
+    },
+    "source_rubric_hash": "sha256:ed46388cf214b06a878ce7cc6c2581e4550b85b0e21d26e207eca03198c141a4",
+    "source_rubric_version": "3.0.0",
+    "stage": "score",
+    "state_projection": {
+      "hash": "sha256:7d26c079d3169ddc395d6e9418adebd2c8ed8ef2936aa0ff5f170f1430ae265b",
+      "paths": [
+        "context",
+        "prompt",
+        "reply"
+      ],
+      "projected_keys": [
+        "context",
+        "prompt",
+        "reply"
+      ]
+    },
+    "usage": {
+      "input_tokens": 120,
+      "output_tokens": 45
+    },
+    "verdict": "pass"
+  },
+  "rubric_id": "assistant-reply",
+  "runtime": {
+    "name": "fixture",
+    "version": "1"
+  },
+  "state": {
+    "context": {
+      "customer": {
+        "email": "private@example.test"
+      },
+      "steps": [
+        {
+          "keep": "café",
+          "token": "secret-token"
+        }
+      ]
+    },
+    "prompt": "What is the capital of France?",
+    "reply": "The capital of France is Paris."
+  }
+}

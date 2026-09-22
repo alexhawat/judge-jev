@@ -1,0 +1,12 @@
+version: "1.0.0"
+description: Cost of emitting a predicted verdict when a human assigned the actual verdict.
+costs:
+  actual_escalate_predicted_pass: 200.0
+  actual_fail_predicted_pass: 50.0
+  actual_review_predicted_pass: 10.0
+  actual_pass_predicted_escalate: 1.0
+  actual_pass_predicted_review: 0.5
+  default: 5.0
+review_cost: 0.5
+token_cost_per_1000: 0.001
+required_classes: [pass, fail, review, escalate]

@@ -18,6 +18,9 @@
     "answers",
     "routing_reason",
     "mock",
+    "backend",
+    "requested_model",
+    "backend_provenance",
     "deciding_answers",
     "confidence_floor",
     "runtime",
@@ -25,6 +28,47 @@
     "deterministic_gates"
   ],
   "additionalProperties": false,
+  "$defs": {
+    "answers": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "noul"],
+            "properties": {
+              "type": { "const": "noul" },
+              "noul": { "type": "number", "minimum": 0, "maximum": 1 }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["type", "choice", "confidence", "probabilities"],
+            "properties": {
+              "type": { "const": "choice" },
+              "choice": { "type": "string" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "probabilities": { "type": "object", "additionalProperties": { "type": "number" } }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["type", "score", "confidence", "probabilities"],
+            "properties": {
+              "type": { "const": "score" },
+              "score": { "type": "number" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "legend": { "type": "object", "additionalProperties": true },
+              "probabilities": { "type": "object", "additionalProperties": { "type": "number" } }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
   "properties": {
     "rubric_id": { "type": "string" },
     "rubric_version": {
@@ -78,6 +122,15 @@
       "type": "string",
       "description": "The model that answered, as the API reported it — not necessarily the model the rubric asked for, since the API may resolve an alias. Under --mock nothing answers, so it is the requested model (jev-1.13.0)."
     },
+    "requested_model": {
+      "type": ["string", "null"],
+      "description": "The version pinned by the rubric before provider alias resolution."
+    },
+    "backend": { "type": "string", "enum": ["typesafe", "cloudflare", "replay"] },
+    "backend_provenance": {
+      "type": "string",
+      "enum": ["live_model", "recorded_model", "canned_demo"]
+    },
     "state_projection": {
       "type": "object",
       "description": "Allowlisted state_filter paths and the top-level keys that survived filtering.",
@@ -123,55 +176,7 @@
       },
       "additionalProperties": false
     },
-    "answers": {
-      "type": "object",
-      "additionalProperties": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": ["type", "noul"],
-            "properties": {
-              "type": { "const": "noul" },
-              "noul": { "type": "number", "minimum": 0, "maximum": 1 }
-            },
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "required": ["type", "choice", "confidence", "probabilities"],
-            "properties": {
-              "type": { "const": "choice" },
-              "choice": { "type": "string" },
-              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-              "probabilities": {
-                "type": "object",
-                "additionalProperties": { "type": "number" }
-              }
-            },
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "required": ["type", "score", "confidence", "probabilities"],
-            "properties": {
-              "type": { "const": "score" },
-              "score": { "type": "number" },
-              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-              "legend": {
-                "type": "object",
-                "description": "Score levels keyed by level number, as returned by the API so a score can be interpreted.",
-                "additionalProperties": true
-              },
-              "probabilities": {
-                "type": "object",
-                "additionalProperties": { "type": "number" }
-              }
-            },
-            "additionalProperties": false
-          }
-        ]
-      }
-    },
+    "answers": { "$ref": "#/$defs/answers" },
     "routing_reason": { "type": "string" },
     "mock": { "type": "boolean" },
     "request_id": { "type": ["string", "null"] }
