@@ -3,18 +3,23 @@
 //! Validation mirrors `judge_jev/rubric.py`: a rubric one runtime rejects must be
 //! rejected by the other, or the "shared rubric" guarantee is not a guarantee.
 
+use crate::canonical::canonical_json;
+use crate::embedded_assets;
 use crate::models::{
     fields_for_type, is_text_field, stage_index, RoutingRule, Rubric, OPS, STAGE_ORDER, VERDICTS,
 };
-use crate::paths::rubrics_dir;
+use crate::paths::external_rubrics_dir;
 use crate::state_filter::parse_path;
 use anyhow::{bail, Context, Result};
+use serde_json::{json, Map, Value};
 use std::fs;
 
 const QUESTION_TYPES: [&str; 3] = ["noul", "choice", "score"];
 
 pub fn list_rubric_ids() -> Result<Vec<String>> {
-    let dir = rubrics_dir();
+    let Some(dir) = external_rubrics_dir() else {
+        return Ok(embedded_assets::rubric_ids());
+    };
     let mut ids = Vec::new();
     for entry in
         fs::read_dir(&dir).with_context(|| format!("read rubrics dir {}", dir.display()))?
@@ -32,9 +37,15 @@ pub fn list_rubric_ids() -> Result<Vec<String>> {
 }
 
 pub fn load_rubric(rubric_id: &str) -> Result<Rubric> {
-    let path = rubrics_dir().join(format!("{rubric_id}.yaml"));
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("rubric not found: {rubric_id} ({})", path.display()))?;
+    let text = if let Some(dir) = external_rubrics_dir() {
+        let path = dir.join(format!("{rubric_id}.yaml"));
+        fs::read_to_string(&path)
+            .with_context(|| format!("rubric not found: {rubric_id} ({})", path.display()))?
+    } else {
+        embedded_assets::rubric(rubric_id)
+            .with_context(|| format!("rubric not found: {rubric_id} (embedded assets)"))?
+            .to_string()
+    };
     parse_rubric(&text).with_context(|| format!("invalid rubric {rubric_id}"))
 }
 
@@ -50,7 +61,8 @@ fn validate(rubric: &Rubric) -> Result<()> {
     validate_questions(rubric)?;
 
     for entry in &rubric.state_filter {
-        parse_path(&entry.path).with_context(|| format!("invalid state_filter path '{}'", entry.path))?;
+        parse_path(&entry.path)
+            .with_context(|| format!("invalid state_filter path '{}'", entry.path))?;
     }
 
     for (name, floor) in &rubric.confidence_floors {
@@ -90,7 +102,12 @@ fn validate_questions(rubric: &Rubric) -> Result<()> {
             );
         }
         match spec.qtype.as_str() {
-            "choice" if spec.criteria.as_mapping().is_none_or(|criteria| criteria.is_empty()) => {
+            "choice"
+                if spec
+                    .criteria
+                    .as_mapping()
+                    .is_none_or(|criteria| criteria.is_empty()) =>
+            {
                 bail!("questions.{name}: a choice question needs a non-empty criteria mapping")
             }
             "score" => match spec.criteria.as_sequence() {
@@ -210,21 +227,9 @@ fn validate_condition(
         if !value.is_finite() {
             bail!("{where_}: numeric value must be finite");
         }
-        if (condition.field == "noul" || condition.field == "confidence")
-            && !(0.0..=1.0).contains(&value)
-        {
-            bail!("{where_}: {} threshold must be between 0 and 1", condition.field);
-        }
-        if condition.field == "score" {
-            let highest = question
-                .criteria
-                .as_sequence()
-                .map(|levels| levels.len().saturating_sub(1))
-                .unwrap_or(0);
-            if value < 0.0 || value > highest as f64 {
-                bail!("{where_}: score threshold must be between 0 and {highest}");
-            }
-        }
+        // A finite comparison can deliberately be unreachable (for example,
+        // confidence > 1 to disable a rule). Runtime answer values are still
+        // checked against their actual domains.
     }
     Ok(())
 }
@@ -271,4 +276,50 @@ pub fn show_rubric(rubric_id: &str) -> Result<String> {
         }
     }
     Ok(lines.join("\n"))
+}
+
+pub fn effective_rubric_payload(rubric: &Rubric) -> Result<Value> {
+    let mut questions = Map::new();
+    for (name, spec) in &rubric.questions {
+        questions.insert(
+            name.clone(),
+            json!({
+                "type": spec.qtype,
+                "stage": spec.stage,
+                "instructions": spec.instructions,
+                "criteria": serde_json::to_value(&spec.criteria)?,
+            }),
+        );
+    }
+    let rules: Vec<Value> = rubric
+        .routing
+        .rules
+        .iter()
+        .map(|rule| {
+            json!({
+                "verdict": rule.verdict,
+                "reason": rule.reason,
+                "default": rule.default,
+                "all": rule.all,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "id": rubric.id,
+        "version": rubric.version,
+        "model": rubric.model,
+        "stakes": rubric.stakes,
+        "confidence_floors": rubric.confidence_floors,
+        "state_filter": rubric.state_filter,
+        "questions": questions,
+        "routing": {"rules": rules},
+    }))
+}
+
+pub fn rubric_content_hash(rubric: &Rubric) -> Result<String> {
+    let payload = canonical_json(&effective_rubric_payload(rubric)?)?;
+    Ok(format!(
+        "sha256:{}",
+        crate::gates::sha256_hex(payload.as_bytes())
+    ))
 }

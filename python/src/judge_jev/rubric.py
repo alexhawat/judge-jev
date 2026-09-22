@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 from typing import Any
 
 import yaml
@@ -16,6 +17,7 @@ from judge_jev.models import (
     RubricError,
 )
 from judge_jev.paths import rubrics_dir
+from judge_jev.canonical import canonical_json
 from judge_jev.routing import FIELDS_BY_TYPE, OPS, TEXT_FIELDS
 from judge_jev.state_filter import StatePath, StatePathError, parse_path
 
@@ -113,24 +115,17 @@ def _validate_condition(condition: Condition, questions: dict[str, Any], where: 
                 f"'{condition.answer}'; expected one of {sorted(labels)}"
             )
     else:
-        if isinstance(condition.value, bool):
+        if isinstance(condition.value, bool) or not isinstance(condition.value, (int, float)):
             raise RubricError(
                 f"{where}: field {condition.field!r} needs a numeric value, got {condition.value!r}"
             )
-        try:
-            numeric = float(condition.value)
-        except (TypeError, ValueError):
-            raise RubricError(
-                f"{where}: field {condition.field!r} needs a numeric value, got {condition.value!r}"
-            ) from None
+        numeric = float(condition.value)
         if not math.isfinite(numeric):
             raise RubricError(f"{where}: numeric value must be finite")
-        if condition.field in ("noul", "confidence") and not 0.0 <= numeric <= 1.0:
-            raise RubricError(f"{where}: {condition.field} threshold must be between 0 and 1")
-        if condition.field == "score":
-            highest = len(question.get("criteria") or []) - 1
-            if not 0.0 <= numeric <= highest:
-                raise RubricError(f"{where}: score threshold must be between 0 and {highest}")
+        # Comparison thresholds may intentionally be unreachable (for example,
+        # confidence > 1 to disable a rule temporarily). Answer values themselves
+        # remain domain validated; rubric thresholds only need to be finite and
+        # compatible with the field's numeric type.
 
 
 def _validate_questions(questions: Any) -> dict[str, dict[str, Any]]:
@@ -213,12 +208,9 @@ def load_rubric(rubric_id: str) -> Rubric:
         raise RubricError(f"{rubric_id}: confidence_floors must be a mapping")
     parsed_floors: dict[str, float] = {}
     for name, value in floors.items():
-        if isinstance(value, bool):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise RubricError(f"{rubric_id}: confidence_floors.{name} must be a number")
-        try:
-            floor = float(value)
-        except (TypeError, ValueError):
-            raise RubricError(f"{rubric_id}: confidence_floors.{name} must be a number") from None
+        floor = float(value)
         if not math.isfinite(floor) or not 0.0 <= floor <= 1.0:
             raise RubricError(
                 f"{rubric_id}: confidence_floors.{name} must be finite and between 0 and 1"
@@ -274,3 +266,50 @@ def show_rubric(rubric_id: str) -> str:
             )
             lines.append(f"  - {rule.verdict} when {clauses}")
     return "\n".join(lines)
+
+
+def effective_rubric_payload(rubric: Rubric) -> dict[str, Any]:
+    """The complete behavior-bearing rubric representation used for provenance."""
+    return {
+        "id": rubric.id,
+        "version": rubric.version,
+        "model": rubric.model,
+        "stakes": rubric.stakes,
+        "confidence_floors": rubric.confidence_floors,
+        "state_filter": [
+            {"path": entry.path, "required": entry.required} for entry in rubric.state_filter
+        ],
+        "questions": {
+            name: {
+                "type": spec["type"],
+                "stage": spec["stage"],
+                "instructions": spec.get("instructions"),
+                "criteria": spec.get("criteria"),
+            }
+            for name, spec in rubric.questions.items()
+        },
+        "routing": {
+            "rules": [
+                {
+                    "verdict": rule.verdict,
+                    "reason": rule.reason,
+                    "default": rule.default,
+                    "all": [
+                        {
+                            "answer": condition.answer,
+                            "field": condition.field,
+                            "op": condition.op,
+                            "value": condition.value,
+                        }
+                        for condition in rule.conditions
+                    ],
+                }
+                for rule in rubric.rules
+            ]
+        },
+    }
+
+
+def rubric_content_hash(rubric: Rubric) -> str:
+    payload = canonical_json(effective_rubric_payload(rubric)).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()

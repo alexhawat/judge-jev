@@ -17,7 +17,6 @@ from judge_jev.gates import (
     build_state_projection,
     escalate_on_injection,
     evaluate_gates,
-    evaluate_replay_gates,
     state_projection_hash,
 )
 from judge_jev.logfire_tracing import span_gates, span_judge_run, span_route, span_system_one
@@ -32,7 +31,8 @@ from judge_jev.models import (
 )
 from judge_jev.paths import repo_root
 from judge_jev.routing import route_verdict_with_candidate
-from judge_jev.rubric import load_rubric
+from judge_jev.reroute import reroute_with_rubric
+from judge_jev.rubric import load_rubric, rubric_content_hash
 from judge_jev.state_filter import filter_state
 from judge_jev.typesafe_client import (
     MOCK_ANSWERS_KEY,
@@ -181,6 +181,7 @@ def run_judgment(
             result = JudgmentResult(
                 rubric_id=rubric.id,
                 rubric_version=rubric.version,
+                rubric_hash=rubric_content_hash(rubric),
                 verdict=verdict,
                 confidence=confidence,
                 stage=stage,
@@ -192,6 +193,8 @@ def run_judgment(
                 deciding_answers=deciding,
                 confidence_floor=rubric.confidence_floor,
                 request_id=request_id,
+                source_rubric_version=rubric.version,
+                source_rubric_hash=rubric_content_hash(rubric),
                 state_projection=projection,
                 deterministic_gates=gate_outcomes,
             )
@@ -236,16 +239,27 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
 
     rubric = load_rubric(saved["rubric_id"])
     drift = version_drift(saved, rubric.version)
-    if drift is not None and not allow_version_drift:
-        raise JudgeJevError(f"{drift}; re-run with --allow-version-drift to route it anyway")
+    current_hash = rubric_content_hash(rubric)
+    saved_hash = saved.get("rubric_hash")
+    hash_drift = None
+    if saved_hash is not None and str(saved_hash) != current_hash:
+        hash_drift = (
+            f"saved result carries rubric_hash {saved_hash}, but {current_hash} is on disk"
+        )
+    blocking_drift = drift or hash_drift
+    if blocking_drift is not None and not allow_version_drift:
+        raise JudgeJevError(
+            f"{blocking_drift}; re-run with --allow-version-drift to route it anyway"
+        )
 
     answers = validate_answers(rubric, saved["answers"])
-    verdict, reason, stage, deciding, confidence, confidence_candidate = (
-        route_verdict_with_candidate(rubric, answers)
-    )
     # Under drift the result records the version it was ROUTED under, so the reason
     # is the only place the original version survives. Say it there.
-    prefix = f"replay ({drift})" if drift is not None else "replay"
+    provenance_note = blocking_drift
+    if saved_hash is None:
+        legacy = "saved result carries no rubric_hash, so content drift cannot be checked"
+        provenance_note = f"{provenance_note}; {legacy}" if provenance_note else legacy
+    prefix = f"replay ({provenance_note})" if provenance_note is not None else "replay"
     usage_data = saved.get("usage", {}) or {}
     usage = Usage(
         input_tokens=usage_data.get("input_tokens"),
@@ -264,24 +278,19 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
         GateOutcome(g["gate_id"], g["outcome"], g["reason"])
         for g in saved.get("deterministic_gates") or []
     ]
-    gate_outcomes = evaluate_replay_gates(
-        GateContext(
-            rubric=rubric,
-            filtered_state=None,
-            answers=answers,
-            verdict=verdict,
-            confidence=confidence,
-            confidence_floor=rubric.confidence_floor,
-            confidence_candidate=confidence_candidate,
-            replay=True,
-        ),
-        historical_gates,
+    rerouted = reroute_with_rubric(
+        rubric, answers, historical_gates=historical_gates, reason_prefix=prefix
     )
-
-    verdict, published_reason = escalate_on_injection(verdict, f"{prefix}: {reason}", gate_outcomes)
+    verdict = rerouted.verdict
+    published_reason = rerouted.reason
+    stage = rerouted.routing.stage
+    deciding = list(rerouted.routing.deciding_answers)
+    confidence = rerouted.routing.confidence
+    gate_outcomes = list(rerouted.gates)
     return JudgmentResult(
         rubric_id=rubric.id,
         rubric_version=rubric.version,
+        rubric_hash=current_hash,
         verdict=verdict,
         confidence=confidence,
         stage=stage,
@@ -293,6 +302,8 @@ def replay_judgment(saved: dict[str, Any], *, allow_version_drift: bool = False)
         deciding_answers=deciding,
         confidence_floor=rubric.confidence_floor,
         request_id=saved.get("request_id"),
+        source_rubric_version=saved.get("source_rubric_version", saved.get("rubric_version")),
+        source_rubric_hash=saved.get("source_rubric_hash", saved.get("rubric_hash")),
         runtime=Runtime(RUNTIME_NAME, RUNTIME_VERSION),
         state_projection=projection,
         deterministic_gates=gate_outcomes,

@@ -20,9 +20,15 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/_common.sh"
 DESTRUCTIVE="${DESTRUCTIVE:-0}"
 
 ex_judge assistant-reply "$EX_HERE/input.json"
-echo
-ex_summary
-echo
+
+# A result exists only for verdict exits. Operational/usage failures may have an
+# empty or diagnostic stdout, so parsing before this check would turn a deliberate
+# fail-open/closed policy into an accidental JSON crash.
+if (( EX_CODE >= 0 && EX_CODE <= 4 )); then
+  echo
+  ex_summary
+  echo
+fi
 
 case "$EX_CODE" in
   0) echo "-> pass: publishing the reply" ;;

@@ -18,6 +18,9 @@ fi
 case "${1:-}" in
   init|doctor|reply|trajectory|input|explain|history) RUNTIME=python ;;
 esac
+if [[ $# -eq 0 && -t 0 ]]; then
+  RUNTIME=python
+fi
 
 case "$RUNTIME" in
   python)
@@ -30,6 +33,7 @@ case "$RUNTIME" in
       set -e
       [[ "$prep" == 0 ]] || exit 10
     fi
+    [[ -x "$PY_BIN" ]] || { echo "judge-jev: Python bootstrap did not install $PY_BIN" >&2; exit 10; }
     exec "$PY_BIN" "$@"
     ;;
   rust)
@@ -40,6 +44,7 @@ case "$RUNTIME" in
     prep=$?
     set -e
     [[ "$prep" == 0 ]] || exit 10
+    [[ -x "$BIN" ]] || { echo "judge-jev: Rust bootstrap did not build $BIN" >&2; exit 10; }
     exec "$BIN" "$@"
     ;;
   *)

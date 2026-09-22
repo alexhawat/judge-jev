@@ -22,11 +22,15 @@ $Root = Split-Path -Parent $PSScriptRoot
 $env:JUDGE_JEV_ROOT = $Root
 
 if (-not $Runtime) {
-    Write-Host "Select judge-jev runtime:"
-    Write-Host "  1) python"
-    Write-Host "  2) rust"
-    $choice = Read-Host "Enter 1 or 2 [1]"
-    $Runtime = switch ($choice) { "" { "python" } "1" { "python" } "2" { "rust" } default { Write-ErrLine "Choose 1 or 2."; exit 11 } }
+    if ([Console]::IsInputRedirected) {
+        $Runtime = "python"
+    } else {
+        Write-Host "Select judge-jev runtime:"
+        Write-Host "  1) python"
+        Write-Host "  2) rust"
+        $choice = Read-Host "Enter 1 or 2 [1]"
+        $Runtime = switch ($choice) { "" { "python" } "1" { "python" } "2" { "rust" } default { Write-ErrLine "Choose 1 or 2."; exit 11 } }
+    }
 }
 
 switch ($Runtime) {
@@ -43,7 +47,15 @@ switch ($Runtime) {
             Write-ErrLine "uv sync --dev failed (exit $exitCode)"
             exit 10
         }
-        & (Join-Path $Root "python/.venv/Scripts/judge-jev.exe") --version | Out-Null
+        $PyBinExe = Join-Path $Root "python/.venv/Scripts/judge-jev.exe"
+        $PyBinCmd = Join-Path $Root "python/.venv/Scripts/judge-jev.cmd"
+        $PyBinPlain = Join-Path $Root "python/.venv/bin/judge-jev"
+        $PyBin = if (Test-Path $PyBinExe) { $PyBinExe } elseif (Test-Path $PyBinCmd) { $PyBinCmd } elseif (Test-Path $PyBinPlain) { $PyBinPlain } else { $null }
+        if (-not $PyBin) {
+            Write-ErrLine "Python bootstrap did not install judge-jev"
+            exit 10
+        }
+        & $PyBin --version | Out-Null
         if ($LASTEXITCODE -ne 0) { exit 10 }
     }
     "rust" {
@@ -59,7 +71,15 @@ switch ($Runtime) {
             Write-ErrLine "cargo build --release failed (exit $exitCode)"
             exit 10
         }
-        & (Join-Path $Root "rust/target/release/judge-jev.exe") --version | Out-Null
+        $RustBinExe = Join-Path $Root "rust/target/release/judge-jev.exe"
+        $RustBinCmd = Join-Path $Root "rust/target/release/judge-jev.cmd"
+        $RustBinPlain = Join-Path $Root "rust/target/release/judge-jev"
+        $RustBin = if (Test-Path $RustBinExe) { $RustBinExe } elseif (Test-Path $RustBinCmd) { $RustBinCmd } elseif (Test-Path $RustBinPlain) { $RustBinPlain } else { $null }
+        if (-not $RustBin) {
+            Write-ErrLine "Rust bootstrap did not build judge-jev"
+            exit 10
+        }
+        & $RustBin --version | Out-Null
         if ($LASTEXITCODE -ne 0) { exit 10 }
     }
     default {
@@ -72,7 +92,12 @@ $ConfigDir = Join-Path $Root ".judge-jev"
 New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
 $TempRuntime = Join-Path $ConfigDir ("runtime.tmp." + [guid]::NewGuid().ToString("N"))
 Set-Content -Path $TempRuntime -Value $Runtime
-Move-Item -Force -Path $TempRuntime -Destination (Join-Path $ConfigDir "runtime")
+$RuntimeFile = Join-Path $ConfigDir "runtime"
+try {
+    [System.IO.File]::Move($TempRuntime, $RuntimeFile, $true)
+} finally {
+    if (Test-Path $TempRuntime) { Remove-Item -Force $TempRuntime }
+}
 
 Write-Host "Configured runtime=$Runtime at $(Join-Path $Root '.judge-jev/runtime')"
 Write-Host "Export TYPESAFE_API_KEY for live mode, or pass --mock to judge-jev run."

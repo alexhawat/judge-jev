@@ -56,7 +56,7 @@ fn compact_json_array(items: &[String]) -> String {
     format!("[{inner}]")
 }
 
-fn sha256_hex(data: &[u8]) -> String {
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     sha256(data)
         .iter()
         .map(|byte| format!("{byte:02x}"))

@@ -31,6 +31,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/judge_jev"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"../shared/rubrics" = "judge_jev/assets/rubrics"
+"../shared/schemas" = "judge_jev/assets/schemas"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

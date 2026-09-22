@@ -7,6 +7,9 @@
   "required": [
     "rubric_id",
     "rubric_version",
+    "rubric_hash",
+    "source_rubric_version",
+    "source_rubric_hash",
     "verdict",
     "confidence",
     "stage",
@@ -27,6 +30,20 @@
     "rubric_version": {
       "type": "string",
       "description": "The rubric version in force when this judgment was made. `replay` compares it against the rubric on disk and refuses on a mismatch, so a threshold change cannot silently re-decide a past verdict."
+    },
+    "rubric_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Hash of the complete effective rubric content used to route this result."
+    },
+    "source_rubric_version": {
+      "type": ["string", "null"],
+      "description": "Rubric version under which the saved model answers were originally collected."
+    },
+    "source_rubric_hash": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Rubric content hash under which the saved model answers were originally collected; null for legacy results."
     },
     "runtime": {
       "type": "object",

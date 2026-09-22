@@ -16,6 +16,36 @@ const USAGE: &str = "usage: judge-jev <setup|run|rubric|replay> ...
   rubric list | show --id <id>
   --version";
 
+const HELP: &str = "judge-jev — JSON judgment engine
+
+Commands:
+  setup                         Choose and install a runtime
+  run --rubric ID --input FILE  Run one batched judgment (FILE may be -)
+  replay --input FILE           Re-route a saved result without an API call
+  rubric list                   List available rubric IDs
+  rubric show --id ID           Inspect a rubric
+
+Run and replay emit one JSON value on stdout. Verdict exit codes are 0 pass,
+1 fail, 2 review, 3 escalate, 4 skip; 10 means no judgment and 11 means usage.
+Interactive reply, trajectory, doctor, explain, and history commands are provided
+by the recommended Python frontend through scripts/judge-jev.";
+
+fn command_help(command: &str, subcommand: Option<&str>) -> Option<&'static str> {
+    match (command, subcommand) {
+        ("setup", _) => Some("usage: judge-jev setup\n\nChoose and install the Python or Rust runtime."),
+        ("run", _) => Some(
+            "usage: judge-jev run --rubric <id> --input <file.json|-> [--mock] [--tracing] [--tracing-to logfire]\n\nEmits one JudgmentResult JSON value. --mock uses canned offline answers and never falls back to live mode.",
+        ),
+        ("replay", _) => Some(
+            "usage: judge-jev replay --input <result.json|-> [--allow-version-drift]\n\nRe-routes saved answers offline. Content drift requires the explicit override.",
+        ),
+        ("rubric", Some("list")) => Some("usage: judge-jev rubric list"),
+        ("rubric", Some("show")) => Some("usage: judge-jev rubric show --id <id>"),
+        ("rubric", _) => Some("usage: judge-jev rubric <list|show> ..."),
+        _ => None,
+    }
+}
+
 fn main() -> ExitCode {
     // Logs go to stderr so stdout carries nothing but the JudgmentResult JSON and
     // `judge-jev run | jq` works. The Python runtime's loguru sink does the same.
@@ -51,6 +81,24 @@ fn dispatch(args: Vec<String>) -> Result<i32> {
     if command == "--version" && args.len() == 1 {
         println!("judge-jev {RUNTIME_VERSION} ({RUNTIME_NAME})");
         return Ok(EXIT_OK);
+    }
+    if (command == "--help" || command == "-h") && args.len() == 1 {
+        println!("{HELP}");
+        return Ok(EXIT_OK);
+    }
+    if args
+        .iter()
+        .skip(1)
+        .any(|arg| arg == "--help" || arg == "-h")
+    {
+        let subcommand = args
+            .get(1)
+            .map(String::as_str)
+            .filter(|arg| !arg.starts_with('-'));
+        if let Some(help) = command_help(&command, subcommand) {
+            println!("{help}");
+            return Ok(EXIT_OK);
+        }
     }
 
     match command.as_str() {

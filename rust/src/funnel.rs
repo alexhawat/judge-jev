@@ -8,7 +8,7 @@ use crate::gates::{
 use crate::models::{Answer, JudgmentResult, Runtime, SavedJudgment};
 use crate::paths::repo_root;
 use crate::routing::route_verdict;
-use crate::rubric::load_rubric;
+use crate::rubric::{load_rubric, rubric_content_hash};
 use crate::state_filter::filter_state;
 use crate::typesafe::{build_questions, mock, pinned_answers, LiveClient};
 use anyhow::{anyhow, Result};
@@ -75,6 +75,7 @@ pub fn load_input(path: &Path) -> Result<Value> {
 
 pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Result<JudgmentResult> {
     let rubric = load_rubric(rubric_id)?;
+    let rubric_hash = rubric_content_hash(&rubric)?;
     let raw = load_input(input_path)?;
     // Canonical from here on: every request is built from these exact bytes, and
     // both runtimes build the same ones.
@@ -137,6 +138,7 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
     Ok(JudgmentResult {
         rubric_id: rubric.id,
         rubric_version: rubric.version.clone(),
+        rubric_hash: rubric_hash.clone(),
         verdict,
         confidence: routed.confidence,
         stage: routed.stage,
@@ -148,6 +150,8 @@ pub fn run_judgment(rubric_id: &str, input_path: &Path, mock_mode: bool) -> Resu
         deciding_answers: routed.deciding,
         confidence_floor: floor,
         request_id,
+        source_rubric_version: Some(rubric.version.clone()),
+        source_rubric_hash: Some(rubric_hash),
         runtime: Runtime::default(),
         state_projection: projection,
         deterministic_gates: gate_outcomes,
@@ -181,8 +185,15 @@ pub fn version_drift(saved: &SavedJudgment, rubric_version: &str) -> Option<Stri
 pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Result<JudgmentResult> {
     let rubric = load_rubric(&saved.rubric_id)?;
     validate_answers(&rubric, &saved.answers)?;
-    let drift = version_drift(saved, &rubric.version);
-    if let Some(message) = &drift {
+    let version_drift = version_drift(saved, &rubric.version);
+    let current_hash = rubric_content_hash(&rubric)?;
+    let hash_drift = saved.rubric_hash.as_ref().and_then(|saved_hash| {
+        (saved_hash != &current_hash).then(|| {
+            format!("saved result carries rubric_hash {saved_hash}, but {current_hash} is on disk")
+        })
+    });
+    let blocking_drift = version_drift.as_ref().or(hash_drift.as_ref());
+    if let Some(message) = blocking_drift {
         if !allow_version_drift {
             anyhow::bail!("{message}; re-run with --allow-version-drift to route it anyway");
         }
@@ -190,9 +201,18 @@ pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Resu
     let routed = route_verdict(&rubric, &saved.answers);
     // Under drift the result records the version it was ROUTED under, so the reason
     // is the only place the original version survives. Say it there.
-    let prefix = match &drift {
-        Some(message) => format!("replay ({message})"),
-        None => "replay".to_string(),
+    let mut provenance_notes: Vec<String> = Vec::new();
+    if let Some(message) = version_drift.or(hash_drift) {
+        provenance_notes.push(message);
+    }
+    if saved.rubric_hash.is_none() {
+        provenance_notes
+            .push("saved result carries no rubric_hash, so content drift cannot be checked".into());
+    }
+    let prefix = if provenance_notes.is_empty() {
+        "replay".to_string()
+    } else {
+        format!("replay ({})", provenance_notes.join("; "))
     };
     let floor = rubric
         .confidence_floors
@@ -219,6 +239,7 @@ pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Resu
     Ok(JudgmentResult {
         rubric_id: rubric.id,
         rubric_version: rubric.version.clone(),
+        rubric_hash: current_hash,
         verdict,
         confidence: routed.confidence,
         stage: routed.stage,
@@ -230,6 +251,14 @@ pub fn replay_judgment(saved: &SavedJudgment, allow_version_drift: bool) -> Resu
         deciding_answers: routed.deciding,
         confidence_floor: floor,
         request_id: saved.request_id.clone(),
+        source_rubric_version: saved
+            .source_rubric_version
+            .clone()
+            .or_else(|| saved.rubric_version.clone()),
+        source_rubric_hash: saved
+            .source_rubric_hash
+            .clone()
+            .or_else(|| saved.rubric_hash.clone()),
         runtime: Runtime::default(),
         state_projection: saved.state_projection.clone(),
         deterministic_gates: gate_outcomes,

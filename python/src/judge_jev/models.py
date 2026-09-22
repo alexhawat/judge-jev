@@ -123,6 +123,8 @@ class JudgmentResult:
     # saved answers against whatever the rubric says today and reports the new
     # verdict as though it were the original judgment.
     rubric_version: str
+    # Hash of the complete effective rubric content used to route this result.
+    rubric_hash: str
     verdict: str
     confidence: float
     stage: str
@@ -136,6 +138,10 @@ class JudgmentResult:
     # The floor `confidence` was checked against, from confidence_floors[stakes].
     confidence_floor: float = 0.0
     request_id: str | None = None
+    # Provenance of the answers themselves. Replay changes routing provenance but
+    # does not pretend that new model evidence was collected.
+    source_rubric_version: str | None = None
+    source_rubric_hash: str | None = None
     runtime: Runtime = field(default_factory=lambda: Runtime("python", RUNTIME_VERSION))
     # Paths from the rubric state_filter and a stable hash of that allowlist.
     state_projection: StateProjection = field(

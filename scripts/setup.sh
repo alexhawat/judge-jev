@@ -19,13 +19,29 @@ fi
 case "$RUNTIME" in
   python)
     command -v uv >/dev/null || { echo "uv required; see https://docs.astral.sh/uv/"; exit 10; }
+    set +e
     (cd "$ROOT/python" && uv sync --locked --dev)
+    install_code=$?
+    set -e
+    [[ "$install_code" == 0 ]] || exit 10
+    set +e
     "$ROOT/python/.venv/bin/judge-jev" --version >/dev/null
+    smoke_code=$?
+    set -e
+    [[ "$smoke_code" == 0 ]] || exit 10
     ;;
   rust)
     command -v cargo >/dev/null || { echo "cargo required; install Rust toolchain"; exit 10; }
+    set +e
     (cd "$ROOT/rust" && cargo build --release)
+    install_code=$?
+    set -e
+    [[ "$install_code" == 0 ]] || exit 10
+    set +e
     "$ROOT/rust/target/release/judge-jev" --version >/dev/null
+    smoke_code=$?
+    set -e
+    [[ "$smoke_code" == 0 ]] || exit 10
     ;;
   *)
     echo "Unknown runtime: $RUNTIME (use python or rust)" >&2
@@ -34,9 +50,11 @@ case "$RUNTIME" in
 esac
 
 mkdir -p "$ROOT/.judge-jev"
-tmp="$ROOT/.judge-jev/runtime.tmp.$$"
-printf '%s\n' "$RUNTIME" > "$tmp"
-mv "$tmp" "$ROOT/.judge-jev/runtime"
+tmp="$(mktemp "$ROOT/.judge-jev/runtime.tmp.XXXXXX")" || exit 10
+trap 'rm -f "$tmp"' EXIT
+printf '%s\n' "$RUNTIME" > "$tmp" || exit 10
+mv -f "$tmp" "$ROOT/.judge-jev/runtime" || exit 10
+trap - EXIT
 
 echo "Configured runtime=$RUNTIME at $ROOT/.judge-jev/runtime"
 echo "Export TYPESAFE_API_KEY for live mode, or pass --mock to judge-jev run."

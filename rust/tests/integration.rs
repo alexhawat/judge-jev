@@ -464,6 +464,27 @@ fn shipped_rubrics_validate() {
 }
 
 #[test]
+fn numeric_policy_values_are_typed_but_unreachable_thresholds_are_valid() {
+    let source = std::fs::read_to_string(
+        repo()
+            .join("shared")
+            .join("rubrics")
+            .join("assistant-reply.yaml"),
+    )
+    .expect("source rubric");
+
+    let quoted_floor = source.replacen("read_only: 0.5", "read_only: \"0.5\"", 1);
+    assert!(judge_jev::rubric::parse_rubric(&quoted_floor).is_err());
+
+    let quoted_threshold = source.replacen("value: 0.7", "value: \"0.7\"", 1);
+    assert!(judge_jev::rubric::parse_rubric(&quoted_threshold).is_err());
+
+    let unreachable = source.replacen("value: 0.7", "value: 1.1", 1);
+    judge_jev::rubric::parse_rubric(&unreachable)
+        .expect("finite unreachable comparison is valid policy");
+}
+
+#[test]
 fn thresholds_come_from_the_rubric_not_the_code() {
     // The previous implementation matched on substrings of the rule text and used
     // hardcoded thresholds, so editing the shared YAML changed nothing here. Editing

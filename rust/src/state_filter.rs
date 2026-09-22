@@ -347,7 +347,10 @@ mod tests {
             path: "a".into(),
             required: true,
         }];
-        assert_eq!(filter_state(&json!({"a": null}), &declared).unwrap(), json!({"a": null}));
+        assert_eq!(
+            filter_state(&json!({"a": null}), &declared).unwrap(),
+            json!({"a": null})
+        );
     }
 
     #[test]

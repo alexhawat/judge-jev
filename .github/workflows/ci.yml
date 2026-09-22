@@ -103,6 +103,8 @@ jobs:
         run: JUDGE_JEV_RUNTIME=python bash examples/run-all.sh
       - name: Examples behave as documented (rust)
         run: JUDGE_JEV_RUNTIME=rust bash examples/run-all.sh
+      - name: Pipeline handles every exit class before parsing JSON
+        run: bash scripts/check-pipeline-example.sh
 
   # mergeCraft's action pin is written twice in one file: the `uses:` ref, and the
   # MERGECRAFT_ACTION_SHA the container reads because `uses:` is not visible from

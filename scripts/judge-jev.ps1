@@ -32,6 +32,7 @@ if ($env:JUDGE_JEV_RUNTIME) {
 
 $Guided = @("init", "doctor", "reply", "trajectory", "input", "explain", "history")
 if ($args.Count -gt 0 -and $Guided -contains $args[0]) { $Runtime = "python" }
+if ($args.Count -eq 0 -and -not [Console]::IsInputRedirected) { $Runtime = "python" }
 
 switch ($Runtime) {
     "python" {
@@ -39,10 +40,17 @@ switch ($Runtime) {
             Write-ErrLine "judge-jev: uv is required; run scripts/setup.ps1"
             exit 10
         }
-        $PyBin = if ($IsWindows) { Join-Path $Root "python/.venv/Scripts/judge-jev.exe" } else { Join-Path $Root "python/.venv/bin/judge-jev" }
+        $PyBinExe = Join-Path $Root "python/.venv/Scripts/judge-jev.exe"
+        $PyBinCmd = Join-Path $Root "python/.venv/Scripts/judge-jev.cmd"
+        $PyBinPlain = Join-Path $Root "python/.venv/bin/judge-jev"
+        $PyBin = if (Test-Path $PyBinExe) { $PyBinExe } elseif (Test-Path $PyBinCmd) { $PyBinCmd } else { $PyBinPlain }
         if (-not (Test-Path $PyBin)) {
             uv sync --project (Join-Path $Root "python") --locked
             if ($LASTEXITCODE -ne 0) { exit 10 }
+        }
+        if (-not (Test-Path $PyBin)) {
+            Write-ErrLine "judge-jev: Python bootstrap did not install $PyBin"
+            exit 10
         }
         & $PyBin @args
         exit $LASTEXITCODE
@@ -52,8 +60,9 @@ switch ($Runtime) {
         # pwsh there) and `.exe` on Windows; check both so this script works
         # wherever pwsh does.
         $BinExe = Join-Path $Root "rust/target/release/judge-jev.exe"
+        $BinCmd = Join-Path $Root "rust/target/release/judge-jev.cmd"
         $BinPlain = Join-Path $Root "rust/target/release/judge-jev"
-        $Bin = if (Test-Path $BinExe) { $BinExe } elseif (Test-Path $BinPlain) { $BinPlain } else { $null }
+        $Bin = if (Test-Path $BinExe) { $BinExe } elseif (Test-Path $BinCmd) { $BinCmd } elseif (Test-Path $BinPlain) { $BinPlain } else { $null }
 
         if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
             Write-ErrLine "judge-jev: cargo is required; run scripts/setup.ps1"
@@ -65,7 +74,11 @@ switch ($Runtime) {
                 Write-ErrLine "cargo build --release failed (exit $buildExit)"
                 exit 10
             }
-        $Bin = if (Test-Path $BinExe) { $BinExe } else { $BinPlain }
+        $Bin = if (Test-Path $BinExe) { $BinExe } elseif (Test-Path $BinCmd) { $BinCmd } else { $BinPlain }
+        if (-not (Test-Path $Bin)) {
+            Write-ErrLine "judge-jev: Rust bootstrap did not build $Bin"
+            exit 10
+        }
 
         & $Bin @args
         exit $LASTEXITCODE

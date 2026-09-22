@@ -159,7 +159,8 @@ impl RetryPolicy {
                     if remaining < 1.0 {
                         break;
                     }
-                    self.per_operation_timeout_secs.min(remaining.floor() as u64)
+                    self.per_operation_timeout_secs
+                        .min(remaining.floor() as u64)
                 }
                 None => self.per_operation_timeout_secs,
             };

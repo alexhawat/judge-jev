@@ -66,6 +66,10 @@ All adapters invoke `./scripts/judge-jev` so runtime selection stays in `.judge-
 bash examples/run-all.sh
 ```
 
+For a readable first run, use `./scripts/judge-jev reply --prompt 'What is 2+2?'
+--reply '4' --mock`. The `DEMO — CANNED ANSWERS` heading is deliberate: remove
+`--mock` only for an authorized live call with `TYPESAFE_API_KEY` present.
+
 `examples/` holds six runnable end-to-end examples (see `examples/README.md`); they
 run mocked and offline, and `run-all.sh` checks each still reaches the verdict it
 documents.
@@ -104,7 +108,8 @@ See `llms.txt` and shared rubrics. Summary:
 4. Noul value = P(proposition yes), not “% grounded”; 0.5 is uncertainty—not a semantic midpoint.
 5. Score/choice `confidence` and verdict `confidence` are not correctness probabilities.
 6. Missing judge answers escalate; never treat as a clean pass.
-7. Every JudgmentResult records `state_projection` and `deterministic_gates`.
+7. Every JudgmentResult records `state_projection`, complete `rubric_hash`, source
+   rubric provenance, and `deterministic_gates`.
 8. Version questions and thresholds in `shared/rubrics/*.yaml` only.
 
 ## Jaggedness

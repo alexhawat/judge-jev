@@ -18,6 +18,11 @@
 - `judge-jev rubric list|show --id <id>`
 - `judge-jev replay --input <judgment-result.json|-> [--allow-version-drift]`
 
+Python is the recommended human frontend and also provides `init`, `doctor`,
+`reply`, `trajectory`, `input template|validate`, `explain`, and opt-in `history`.
+The launcher routes these commands to Python even when Rust is the saved machine
+runtime. Rust provides root and per-command help for its machine commands.
+
 Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
 
 ## Layout
@@ -45,7 +50,7 @@ Dispatcher: `scripts/judge-jev` reads `.judge-jev/runtime`.
 - Noul value = P(proposition yes), not “% grounded”. 0.5 = uncertain, not “medium”.
 - Score confidence ≠ verdict correctness probability.
 - Missing judge answers escalate; never treat as pass.
-- JudgmentResult always carries state_projection + deterministic_gates.
+- JudgmentResult always carries state_projection + complete rubric/source hashes + deterministic_gates.
 - TypeSafe/API failure → exit 10, never a scored pass/fail.
 - Arithmetic/threshold enforcement stays in code, not in Jev prompts.
 - Untrusted PR/ticket/user content: fail-closed on injection signals. A failed `injection_heuristic` gate escalates.

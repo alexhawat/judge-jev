@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "dataset_kind": "synthetic-curated-smoke",
+  "label_provenance": "human-authored illustrative expectations",
+  "intended_use": "offline pipeline and policy smoke testing only"
+}

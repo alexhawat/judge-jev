@@ -7,6 +7,7 @@ evaluates a string as code.
 from __future__ import annotations
 
 import operator
+from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from judge_jev.models import (
@@ -49,6 +50,54 @@ class UnevaluableRule(Exception):
         super().__init__(f"rule {rule_index} reads missing answer '{answer_id}'")
         self.rule_index = rule_index
         self.answer_id = answer_id
+
+
+@dataclass(frozen=True)
+class ComparisonTrace:
+    answer: str
+    field: str
+    op: str
+    expected: Any
+    actual: Any = None
+    evaluated: bool = False
+    matched: bool | None = None
+
+
+@dataclass(frozen=True)
+class RuleTrace:
+    rule_id: str
+    verdict: str
+    default: bool
+    outcome: str
+    comparisons: tuple[ComparisonTrace, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RoutingEvaluation:
+    verdict: str
+    reason: str
+    stage: str
+    deciding_answers: tuple[str, ...]
+    confidence: float
+    confidence_candidate: str | None
+    matched_rule_id: str | None
+    rules: tuple[RuleTrace, ...]
+
+    def public_tuple(self) -> tuple[str, str, str, list[str], float]:
+        return self.verdict, self.reason, self.stage, list(self.deciding_answers), self.confidence
+
+    def candidate_tuple(self) -> tuple[str, str, str, list[str], float, str | None]:
+        return (*self.public_tuple(), self.confidence_candidate)
+
+    def trace_dict(self) -> dict[str, Any]:
+        return {
+            "matched_rule_id": self.matched_rule_id,
+            "confidence_candidate": self.confidence_candidate,
+            "rules": [rule.to_dict() for rule in self.rules],
+        }
 
 
 def answer_confidence(answer: dict[str, Any]) -> float | None:
@@ -108,71 +157,121 @@ def route_verdict(
     rubric: Rubric, answers: dict[str, dict[str, Any]]
 ) -> tuple[str, str, str, list[str], float]:
     """Return the stable public routing tuple."""
-    verdict, reason, stage, deciding, confidence, _candidate = route_verdict_with_candidate(
-        rubric, answers
-    )
-    return verdict, reason, stage, deciding, confidence
+    return evaluate_routing(rubric, answers).public_tuple()
 
 
 def route_verdict_with_candidate(
     rubric: Rubric, answers: dict[str, dict[str, Any]]
 ) -> tuple[str, str, str, list[str], float, str | None]:
-    """Return routing fields plus any pass/fail candidate downgraded by the floor.
+    """Return routing fields plus any pass/fail candidate downgraded by the floor."""
+    return evaluate_routing(rubric, answers).candidate_tuple()
+
+
+def evaluate_routing(rubric: Rubric, answers: dict[str, dict[str, Any]]) -> RoutingEvaluation:
+    """Evaluate ordered rules once and return the decision plus its exact trace.
 
     The first rule whose conditions all hold wins. A rule that cannot be evaluated
-    escalates rather than being skipped. The final element is the automatic
-    pass/fail candidate when the confidence floor downgraded it to review.
+    escalates rather than being skipped. Stable rule IDs are their zero-padded
+    position in the versioned rubric, so explain/evaluation/tuning share identity.
     """
     missing = [answer_id for answer_id in rubric.questions if answer_id not in answers]
     if missing:
-        return (
-            "escalate",
-            "Judgment response is incomplete; missing answers: " + ", ".join(sorted(missing)) + ".",
-            _stage_for(rubric, tuple(missing)),
-            [],
-            0.0,
-            None,
+        return RoutingEvaluation(
+            verdict="escalate",
+            reason="Judgment response is incomplete; missing answers: "
+            + ", ".join(sorted(missing))
+            + ".",
+            stage=_stage_for(rubric, tuple(missing)),
+            deciding_answers=(),
+            confidence=0.0,
+            confidence_candidate=None,
+            matched_rule_id=None,
+            rules=tuple(
+                RuleTrace(f"rule:{index:03d}", rule.verdict, rule.default, "not_evaluated")
+                for index, rule in enumerate(rubric.rules)
+            ),
         )
 
+    traces: list[RuleTrace] = []
     for index, rule in enumerate(rubric.rules):
+        rule_id = f"rule:{index:03d}"
         if rule.default:
             # The catch-all decided nothing, so there is no confidence to report.
             if rule.verdict in GATED_VERDICTS and 0.0 < rubric.confidence_floor:
-                return (
-                    "review",
-                    (
+                traces.append(RuleTrace(rule_id, rule.verdict, True, "matched"))
+                traces.extend(
+                    RuleTrace(f"rule:{later:03d}", item.verdict, item.default, "not_evaluated")
+                    for later, item in enumerate(rubric.rules[index + 1 :], index + 1)
+                )
+                return RoutingEvaluation(
+                    verdict="review",
+                    reason=(
                         f"{rule.reason} Downgraded from '{rule.verdict}': confidence "
                         f"0.00 is below the {rubric.stakes} floor of "
                         f"{rubric.confidence_floor:.2f}."
                     ),
-                    "route",
-                    [],
-                    0.0,
-                    rule.verdict,
+                    stage="route",
+                    deciding_answers=(),
+                    confidence=0.0,
+                    confidence_candidate=rule.verdict,
+                    matched_rule_id=rule_id,
+                    rules=tuple(traces),
                 )
-            return rule.verdict, rule.reason, "route", [], 0.0, None
+            traces.append(RuleTrace(rule_id, rule.verdict, True, "matched"))
+            return RoutingEvaluation(
+                rule.verdict, rule.reason, "route", (), 0.0, None, rule_id, tuple(traces)
+            )
 
-        try:
-            matched = all(
-                _evaluate(condition, answers[condition.answer])
-                if condition.answer in answers
-                else _raise_missing(index, condition.answer)
-                for condition in rule.conditions
+        comparisons: list[ComparisonTrace] = []
+        matched = True
+        for condition_index, condition in enumerate(rule.conditions):
+            answer = answers.get(condition.answer)
+            if answer is None or condition.field not in answer:
+                comparisons.append(
+                    ComparisonTrace(condition.answer, condition.field, condition.op, condition.value)
+                )
+                comparisons.extend(
+                    ComparisonTrace(c.answer, c.field, c.op, c.value)
+                    for c in rule.conditions[condition_index + 1 :]
+                )
+                traces.append(
+                    RuleTrace(rule_id, rule.verdict, False, "unevaluable", tuple(comparisons))
+                )
+                return RoutingEvaluation(
+                    "escalate",
+                    f"Could not evaluate '{rule.verdict}' rule: answer '{condition.answer}' is missing.",
+                    _stage_for(rubric, rule.answer_ids),
+                    (),
+                    0.0,
+                    None,
+                    rule_id,
+                    tuple(traces),
+                )
+            holds = _evaluate(condition, answer)
+            comparisons.append(
+                ComparisonTrace(
+                    condition.answer,
+                    condition.field,
+                    condition.op,
+                    condition.value,
+                    answer[condition.field],
+                    True,
+                    holds,
+                )
             )
-        except UnevaluableRule as err:
-            answer_id = err.answer_id
-            return (
-                "escalate",
-                f"Could not evaluate '{rule.verdict}' rule: answer '{answer_id}' is missing.",
-                _stage_for(rubric, rule.answer_ids),
-                [],
-                0.0,
-                None,
-            )
+            if not holds:
+                comparisons.extend(
+                    ComparisonTrace(c.answer, c.field, c.op, c.value)
+                    for c in rule.conditions[condition_index + 1 :]
+                )
+                matched = False
+                break
 
         if not matched:
+            traces.append(RuleTrace(rule_id, rule.verdict, False, "not_matched", tuple(comparisons)))
             continue
 
+        traces.append(RuleTrace(rule_id, rule.verdict, False, "matched", tuple(comparisons)))
         deciding = rule.answer_ids
         confidence = decision_confidence(answers, deciding)
         stage = _stage_for(rubric, deciding)
@@ -180,22 +279,43 @@ def route_verdict_with_candidate(
 
         if rule.verdict in GATED_VERDICTS and confidence < floor:
             # The rule matched, but not confidently enough to act on automatically.
-            return (
-                "review",
-                (
+            traces.extend(
+                RuleTrace(f"rule:{later:03d}", item.verdict, item.default, "not_evaluated")
+                for later, item in enumerate(rubric.rules[index + 1 :], index + 1)
+            )
+            return RoutingEvaluation(
+                verdict="review",
+                reason=(
                     f"{rule.reason} Downgraded from '{rule.verdict}': confidence "
                     f"{confidence:.2f} is below the {rubric.stakes} floor of {floor:.2f}."
                 ),
-                stage,
-                list(deciding),
-                confidence,
-                rule.verdict,
+                stage=stage,
+                deciding_answers=deciding,
+                confidence=confidence,
+                confidence_candidate=rule.verdict,
+                matched_rule_id=rule_id,
+                rules=tuple(traces),
             )
 
-        return rule.verdict, rule.reason, stage, list(deciding), confidence, None
+        traces.extend(
+            RuleTrace(f"rule:{later:03d}", item.verdict, item.default, "not_evaluated")
+            for later, item in enumerate(rubric.rules[index + 1 :], index + 1)
+        )
+        return RoutingEvaluation(
+            rule.verdict,
+            rule.reason,
+            stage,
+            deciding,
+            confidence,
+            None,
+            rule_id,
+            tuple(traces),
+        )
 
     # No rule matched and the rubric declared no default.
-    return "review", "No routing rule matched.", "route", [], 0.0, None
+    return RoutingEvaluation(
+        "review", "No routing rule matched.", "route", (), 0.0, None, None, tuple(traces)
+    )
 
 
 def _raise_missing(index: int, answer_id: str) -> bool:

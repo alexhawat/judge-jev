@@ -93,10 +93,19 @@ fn all_five_assistant_verdicts_remain_reachable() {
     let rubric = load_rubric("assistant-reply").unwrap();
     let mut cases = Vec::new();
     cases.push(("pass", healthy_reply()));
-    let mut skip = healthy_reply(); skip.insert("screen.judgeable".into(), noul(0.2)); cases.push(("skip", skip));
-    let mut escalate = healthy_reply(); escalate.insert("screen.injection".into(), noul(0.9)); cases.push(("escalate", escalate));
-    let mut fail = healthy_reply(); fail.insert("profile.intent".into(), choice("refusal")); fail.insert("score.helpfulness".into(), score(0.4)); cases.push(("fail", fail));
-    let mut review = healthy_reply(); review.insert("locate.harmful".into(), noul(0.5)); cases.push(("review", review));
+    let mut skip = healthy_reply();
+    skip.insert("screen.judgeable".into(), noul(0.2));
+    cases.push(("skip", skip));
+    let mut escalate = healthy_reply();
+    escalate.insert("screen.injection".into(), noul(0.9));
+    cases.push(("escalate", escalate));
+    let mut fail = healthy_reply();
+    fail.insert("profile.intent".into(), choice("refusal"));
+    fail.insert("score.helpfulness".into(), score(0.4));
+    cases.push(("fail", fail));
+    let mut review = healthy_reply();
+    review.insert("locate.harmful".into(), noul(0.5));
+    cases.push(("review", review));
     for (expected, answers) in cases {
         assert_eq!(route_verdict(&rubric, &answers).verdict, expected);
     }
@@ -105,7 +114,11 @@ fn all_five_assistant_verdicts_remain_reachable() {
 #[test]
 fn trajectory_uncertainty_and_execute_boundaries_are_exact() {
     let rubric = load_rubric("agent-trajectory").unwrap();
-    for answer in ["screen.injection", "locate.unauthorized_write", "route.escalate"] {
+    for answer in [
+        "screen.injection",
+        "locate.unauthorized_write",
+        "route.escalate",
+    ] {
         for (value, expected) in [(0.299, "pass"), (0.3, "review"), (0.301, "review")] {
             let mut answers = healthy_trajectory();
             answers.insert(answer.into(), noul(value));
